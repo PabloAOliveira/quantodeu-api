@@ -1,0 +1,260 @@
+# Exemplos para REST Client (VS Code) / IntelliJ HTTP Client.
+# O cliente guarda o cookie de sessão automaticamente entre as requisições.
+
+@host = http://localhost:8080
+@api = {{host}}/api/v1
+@webhookSecret = troque-pelo-WHATSAPP_WEBHOOK_SECRET
+
+### Health
+GET {{host}}/readyz
+
+### Cadastro
+POST {{api}}/auth/register
+Content-Type: application/json
+
+{
+  "nome": "Maria Silva",
+  "email": "maria@exemplo.com",
+  "telefone": "(11) 98765-4321",
+  "senha": "senhaForte123",
+  "saldo_inicial": "1.000,00"
+}
+
+### Login (grava o cookie __Host-quantodeu_session)
+POST {{api}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "maria@exemplo.com",
+  "senha": "senhaForte123"
+}
+
+### Login para apps nativos (devolve token para Authorization: Bearer)
+POST {{api}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "maria@exemplo.com",
+  "senha": "senhaForte123",
+  "modo": "token"
+}
+
+### Perfil
+GET {{api}}/me
+
+### Confirmar e-mail (o código chega em http://localhost:8025 no ambiente de DEV)
+POST {{api}}/me/email/verificacao/confirmar
+Content-Type: application/json
+
+{ "codigo": "123456" }
+
+### Reenviar código de confirmação do e-mail
+POST {{api}}/me/email/verificacao
+
+### Verificação do telefone — método "mensagem" (o app mostra o código)
+POST {{api}}/me/telefone/verificacao
+Content-Type: application/json
+
+{ "metodo": "mensagem" }
+
+### ...então simule o envio do código pelo WhatsApp do usuário
+POST {{api}}/webhook/whatsapp
+Content-Type: application/json
+X-Webhook-Token: {{webhookSecret}}
+
+{
+  "event": "messages.upsert",
+  "data": {
+    "key": { "remoteJid": "551187654321@s.whatsapp.net", "fromMe": false, "id": "verif-1" },
+    "message": { "conversation": "verificar 123456" }
+  }
+}
+
+### Verificação do telefone — método "codigo" (código enviado ao WhatsApp; em DEV aparece no log)
+POST {{api}}/me/telefone/verificacao
+Content-Type: application/json
+
+{ "metodo": "codigo" }
+
+### Confirmar código recebido
+POST {{api}}/me/telefone/verificacao/confirmar
+Content-Type: application/json
+
+{ "codigo": "123456" }
+
+### Lançamento manual — saída
+POST {{api}}/transacoes
+Content-Type: application/json
+
+{
+  "tipo": "saida",
+  "valor": "150,50",
+  "categoria": "Mercado",
+  "descricao": "compras do mês"
+}
+
+### Lançamento manual — entrada com data
+POST {{api}}/transacoes
+Content-Type: application/json
+
+{
+  "tipo": "entrada",
+  "valor": 3000,
+  "categoria": "salario",
+  "data": "2026-09-05"
+}
+
+### Detalhar / editar / excluir transação (troque o id)
+@transacaoId = 00000000-0000-0000-0000-000000000000
+
+GET {{api}}/transacoes/{{transacaoId}}
+
+###
+PUT {{api}}/transacoes/{{transacaoId}}
+Content-Type: application/json
+
+{
+  "tipo": "saida",
+  "valor": "99,90",
+  "categoria": "farmacia",
+  "descricao": "remédios",
+  "data": "2026-09-10"
+}
+
+###
+DELETE {{api}}/transacoes/{{transacaoId}}
+
+### Listar transações do mês
+GET {{api}}/transacoes?mes=9&ano=2026&page=1&page_size=20
+
+### Filtrar por categoria e tipo
+GET {{api}}/transacoes?categoria=mercado&tipo=saida
+
+### Resumo do mês
+GET {{api}}/resumo?mes=9&ano=2026
+
+### Parcelamento (valor total dividido)
+POST {{api}}/parcelamentos
+Content-Type: application/json
+
+{
+  "tipo": "parcelado",
+  "descricao": "Notebook",
+  "categoria": "eletronicos",
+  "valor_total": "4.599,90",
+  "total_parcelas": 10,
+  "data_primeira_parcela": "2026-10-10"
+}
+
+### Despesa recorrente (valor fixo por mês)
+POST {{api}}/parcelamentos
+Content-Type: application/json
+
+{
+  "tipo": "recorrente",
+  "descricao": "Academia",
+  "categoria": "saude",
+  "valor_parcela": 99.90,
+  "total_parcelas": 12
+}
+
+### Simular financiamento (não grava nada)
+POST {{api}}/parcelamentos/simular
+Content-Type: application/json
+
+{
+  "banco": "Caixa Econômica Federal",
+  "sistema": "sac",
+  "valor_financiado": "200.000,00",
+  "taxa_juros_anual": 8.66,
+  "tipo_taxa": "efetiva",
+  "total_parcelas": 360,
+  "data_primeira_parcela": "2026-10-10"
+}
+
+### Financiamento (parcelas projetadas por juros)
+POST {{api}}/parcelamentos
+Content-Type: application/json
+
+{
+  "tipo": "parcelado",
+  "descricao": "Apartamento MCMV",
+  "categoria": "moradia",
+  "total_parcelas": 360,
+  "data_primeira_parcela": "2026-10-10",
+  "financiamento": {
+    "banco": "Caixa Econômica Federal",
+    "sistema": "sac",
+    "valor_financiado": "200.000,00",
+    "taxa_juros_anual": 8.66,
+    "tipo_taxa": "efetiva"
+  }
+}
+
+### Listar parcelamentos
+GET {{api}}/parcelamentos
+
+### Detalhar / editar / excluir parcelamento (troque o id)
+@parcelamentoId = 00000000-0000-0000-0000-000000000000
+
+GET {{api}}/parcelamentos/{{parcelamentoId}}
+
+### Editar (regera todas as parcelas)
+PUT {{api}}/parcelamentos/{{parcelamentoId}}
+Content-Type: application/json
+
+{
+  "tipo": "parcelado",
+  "descricao": "Notebook Pro",
+  "categoria": "eletronicos",
+  "valor_total": "5.200,00",
+  "total_parcelas": 12
+}
+
+### Excluir mantendo as parcelas já vencidas como lançamentos avulsos
+DELETE {{api}}/parcelamentos/{{parcelamentoId}}?manter_pagas=true
+
+### Trocar senha (encerra todas as sessões e emite cookie novo)
+PUT {{api}}/me/senha
+Content-Type: application/json
+
+{
+  "senha_atual": "senhaForte123",
+  "nova_senha": "outraSenha456"
+}
+
+### Encerrar as OUTRAS sessões (mantém esta)
+DELETE {{api}}/me/sessoes?manter_atual=true
+
+### Encerrar TODAS as sessões (inclusive esta)
+DELETE {{api}}/me/sessoes
+
+### Webhook — Evolution API
+POST {{api}}/webhook/whatsapp
+Content-Type: application/json
+X-Webhook-Token: {{webhookSecret}}
+
+{
+  "event": "messages.upsert",
+  "instance": "quantodeu",
+  "data": {
+    "key": { "remoteJid": "551187654321@s.whatsapp.net", "fromMe": false, "id": "3EB0C767D26A1D8B" },
+    "message": { "conversation": "Gastei 150,00 mercado" }
+  }
+}
+
+### Webhook — Z-API
+POST {{api}}/webhook/whatsapp?token={{webhookSecret}}
+Content-Type: application/json
+
+{
+  "type": "ReceivedCallback",
+  "phone": "5511987654321",
+  "messageId": "A20DA9C0183A2D35A260F53F5D2B9244",
+  "fromMe": false,
+  "isGroup": false,
+  "text": { "message": "Recebi 1.500 do freela" }
+}
+
+### Logout
+POST {{api}}/auth/logout

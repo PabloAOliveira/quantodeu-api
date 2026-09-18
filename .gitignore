@@ -1,0 +1,15 @@
+bin/
+.env
+*.local
+coverage.out
+dump.rdb
+.idea/
+.vscode/
+.DS_Store
+.env.*
+!.env.example
+!.env.production.example
+
+# Entregas antigas: cópias defasadas do que está em docs/ mais snapshots
+# .zip/.tgz do próprio código. Ficam no disco, fora do versionamento.
+Claude outputs/

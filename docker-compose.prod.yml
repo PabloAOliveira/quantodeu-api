@@ -1,0 +1,80 @@
+# Produção: API + PostgreSQL + túnel da Cloudflare.
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Diferenças em relação ao docker-compose.yml (desenvolvimento):
+#   - sem Mailpit: o e-mail sai de verdade pelo SMTP configurado no .env;
+#   - o banco não publica porta nenhuma — só a rede interna do compose o alcança;
+#   - a API escuta só em 127.0.0.1 da máquina: quem expõe para a internet é o
+#     túnel, então nem o Wi-Fi de casa fala direto com ela;
+#   - logs com rodízio, senão um disco de PC antigo enche sozinho.
+name: quantodeu
+
+services:
+  api:
+    build: .
+    container_name: quantodeu-api
+    env_file: .env
+    environment:
+      # Usuário da API: membro de quantodeu_app, sujeito a Row-Level Security.
+      DATABASE_URL: postgres://${APP_DB_USER:-quantodeu_api}:${APP_DB_PASSWORD:?defina APP_DB_PASSWORD}@db:5432/${POSTGRES_DB:-quantodeu}?sslmode=disable
+      # Dono das tabelas: usado apenas para rodar as migrations no boot.
+      DATABASE_MIGRATION_URL: postgres://${POSTGRES_USER:-quantodeu}:${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-quantodeu}?sslmode=disable
+      HTTP_ADDR: ":8080"
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  db:
+    image: postgres:16-alpine
+    container_name: quantodeu-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-quantodeu}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-quantodeu}
+      APP_DB_USER: ${APP_DB_USER:-quantodeu_api}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?defina APP_DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # Conexão de dentro para fora: não abre porta no roteador e funciona mesmo
+  # com CGNAT. O token vem do painel da Cloudflare (Zero Trust > Tunnels) e o
+  # túnel aponta para http://api:8080 dentro desta rede.
+  #
+  # Fica atrás de um profile para a máquina poder ser preparada e testada
+  # ANTES de existir domínio:
+  #   docker compose -f docker-compose.prod.yml up -d                    # API + banco
+  #   docker compose -f docker-compose.prod.yml --profile tunnel up -d   # + túnel
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: quantodeu-tunnel
+    profiles: [tunnel]
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on: [api]
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  pgdata:

@@ -1,0 +1,12 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: quantodeu-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api:9091"]
+    # Se METRICS_TOKEN estiver definido na API, descomente:
+    # authorization:
+    #   type: Bearer
+    #   credentials: troque-pelo-METRICS_TOKEN

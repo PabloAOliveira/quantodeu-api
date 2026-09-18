@@ -1,0 +1,105 @@
+# Ambiente local completo.
+#
+#   cp .env.example .env              # ajuste os segredos
+#   docker compose up --build         # API + PostgreSQL + Mailpit (caixa de e-mail de teste)
+#   docker compose --profile redis up --build           # + Redis (sessões/rate limit distribuído)
+#   docker compose --profile observability up --build   # + Prometheus + Jaeger
+#
+# URLs: API http://localhost:8080 · Swagger http://localhost:8080/docs · E-mails http://localhost:8025
+#       Métricas http://localhost:9091/metrics · Prometheus http://localhost:9090 · Jaeger http://localhost:16686
+
+services:
+  api:
+    build: .
+    container_name: quantodeu-api
+    env_file: .env
+    environment:
+      # Usuário da API: membro de quantodeu_app, sujeito a Row-Level Security.
+      DATABASE_URL: postgres://${APP_DB_USER:-quantodeu_api}:${APP_DB_PASSWORD:-troque-app-db}@db:5432/${POSTGRES_DB:-quantodeu}?sslmode=disable
+      # Dono das tabelas: usado apenas para rodar as migrations no boot.
+      DATABASE_MIGRATION_URL: postgres://${POSTGRES_USER:-quantodeu}:${POSTGRES_PASSWORD:-quantodeu}@db:5432/${POSTGRES_DB:-quantodeu}?sslmode=disable
+      REDIS_ADDR: redis:6379
+      HTTP_ADDR: ":8080"
+      METRICS_ADDR: ":9091"
+      OTEL_ENDPOINT: ${OTEL_ENDPOINT:-http://jaeger:4318}
+    ports:
+      - "8080:8080"
+      - "127.0.0.1:9091:9091"
+    depends_on:
+      db:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+
+  db:
+    image: postgres:16-alpine
+    container_name: quantodeu-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-quantodeu}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quantodeu}
+      POSTGRES_DB: ${POSTGRES_DB:-quantodeu}
+      APP_DB_USER: ${APP_DB_USER:-quantodeu_api}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-troque-app-db}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # Servidor SMTP falso para desenvolvimento: captura TODOS os e-mails enviados
+  # pela API (nada sai para a internet). Veja em http://localhost:8025.
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: quantodeu-mailpit
+    ports:
+      - "127.0.0.1:8025:8025" # interface web
+      - "127.0.0.1:1025:1025" # SMTP
+    environment:
+      MP_MAX_MESSAGES: 500
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: quantodeu-redis
+    profiles: [redis]
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redisdata:/data
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: quantodeu-prometheus
+    profiles: [observability]
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on: [api]
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    container_name: quantodeu-jaeger
+    profiles: [observability]
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "127.0.0.1:16686:16686" # UI
+      - "127.0.0.1:4318:4318"   # OTLP/HTTP
+
+volumes:
+  pgdata:
+  redisdata:
