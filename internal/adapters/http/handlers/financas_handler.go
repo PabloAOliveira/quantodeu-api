@@ -138,6 +138,21 @@ func (h *FinancasHandler) Resumo(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.NewResumoResponse(r))
 }
 
+// Agenda — GET /api/v1/agenda
+func (h *FinancasHandler) Agenda(c *gin.Context) {
+	var q dto.AgendaQuery
+	if err := c.ShouldBindQuery(&q); err != nil {
+		respondError(c, h.log, queryError(err))
+		return
+	}
+	a, err := h.resumo.GetAgenda(c.Request.Context(), middlewares.UserID(c), q.Meses)
+	if err != nil {
+		respondError(c, h.log, err)
+		return
+	}
+	c.JSON(http.StatusOK, dto.NewAgendaResponse(a))
+}
+
 // ---------------------------------------------------------------------------
 // Parcelamentos
 // ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -257,6 +258,78 @@ func (s *ResumoService) GetResumo(ctx context.Context, userID string, ano, mes i
 		PorCategoria:     porCategoria,
 		Cartoes:          cartoes,
 	}, nil
+}
+
+// GetAgenda lista o que vence de hoje até `meses` à frente: parcelas de
+// parcelamentos/financiamentos e faturas de cartão ainda não quitadas.
+//
+// É o que o app precisa para agendar as notificações no aparelho. Sem isto ele
+// teria que pedir o resumo de cada mês e as faturas de cada cartão só para
+// descobrir as datas.
+func (s *ResumoService) GetAgenda(ctx context.Context, userID string, meses int) (*domain.Agenda, error) {
+	if meses <= 0 {
+		meses = domain.MesesAgendaPadrao
+	}
+	if meses > domain.MesesAgendaMax {
+		meses = domain.MesesAgendaMax
+	}
+	hoje := s.hoje()
+	fim := hoje.AddDate(0, meses, 0)
+	agenda := &domain.Agenda{Inicio: hoje, Fim: fim, Itens: []domain.Compromisso{}}
+
+	// As parcelas já existem como lançamentos futuros: basta a faixa de datas.
+	parcelas, err := s.transacoes.ListParcelas(ctx, userID, hoje, fim)
+	if err != nil {
+		return nil, fmt.Errorf("agenda: parcelas: %w", err)
+	}
+	for _, p := range parcelas {
+		item := domain.Compromisso{
+			Tipo: domain.CompromissoParcela, Data: domain.DateOnly(p.Data),
+			Valor: p.Valor, Titulo: p.Descricao, Categoria: p.Categoria,
+		}
+		if p.ParcelamentoID != nil {
+			item.ParcelamentoID = *p.ParcelamentoID
+		}
+		if p.NumeroParcela != nil {
+			item.NumeroParcela = *p.NumeroParcela
+		}
+		agenda.Itens = append(agenda.Itens, item)
+	}
+
+	// Faturas: só as que ainda têm o que pagar. Uma falha aqui não derruba a
+	// agenda inteira — as parcelas continuam valendo.
+	if s.cartoes != nil {
+		cartoes, err := s.cartoes.List(ctx, userID)
+		if err != nil {
+			s.log.WarnContext(ctx, "agenda: faturas indisponíveis", slog.Any("err", err))
+		} else {
+			for _, c := range cartoes {
+				if !c.Cartao.Ativo {
+					continue
+				}
+				for _, f := range []*domain.Fatura{c.APagar, c.EmAberto} {
+					if f == nil || f.Restante() <= 0 {
+						continue
+					}
+					venc := domain.DateOnly(f.Vencimento)
+					if venc.Before(hoje) || !venc.Before(fim) {
+						continue
+					}
+					agenda.Itens = append(agenda.Itens, domain.Compromisso{
+						Tipo: domain.CompromissoFatura, Data: venc,
+						Valor: f.Restante(), Titulo: c.Cartao.Nome,
+						Categoria: "cartão de crédito",
+						CartaoID:  c.Cartao.ID, Competencia: f.Competencia,
+					})
+				}
+			}
+		}
+	}
+
+	sort.SliceStable(agenda.Itens, func(i, j int) bool {
+		return agenda.Itens[i].Data.Before(agenda.Itens[j].Data)
+	})
+	return agenda, nil
 }
 
 // GetProfile monta os dados de /me.

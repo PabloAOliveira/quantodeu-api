@@ -217,6 +217,11 @@ func NewRouter(d RouterDeps) (*gin.Engine, *openapi.Doc, error) {
 	reg(openapi.Route{Method: http.MethodGet, Path: "/resumo", OperationID: "resumo", Summary: "Resumo consolidado do mês", Tags: []string{"Resumo"},
 		Query: dto.ResumoQuery{}, Responses: map[int]openapi.Response{200: {Description: "Resumo", Body: dto.ResumoResponse{}}}}, d.Financas.Resumo)
 
+	reg(openapi.Route{Method: http.MethodGet, Path: "/agenda", OperationID: "agenda",
+		Summary: "O que vence nos próximos meses", Tags: []string{"Resumo"},
+		Description: "Parcelas e faturas ainda não quitadas, por data. É o que o app usa para agendar as notificações de vencimento no aparelho.",
+		Query:       dto.AgendaQuery{}, Responses: map[int]openapi.Response{200: {Description: "Agenda", Body: dto.AgendaResponse{}}}}, d.Financas.Agenda)
+
 	// Parcelamentos
 	pc := []string{"Parcelamentos"}
 	reg(openapi.Route{Method: http.MethodGet, Path: "/parcelamentos", OperationID: "listParcelamentos", Summary: "Listar parcelamentos", Tags: pc,

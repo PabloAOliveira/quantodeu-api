@@ -318,6 +318,51 @@ type ResumoQuery struct {
 	Ano int `form:"ano" binding:"omitempty,min=2000,max=2100" example:"2026"`
 }
 
+// AgendaQuery são os parâmetros de GET /agenda.
+type AgendaQuery struct {
+	Meses int `form:"meses" binding:"omitempty,min=1,max=12" doc:"Horizonte em meses (padrão 6, máximo 12)" example:"6"`
+}
+
+// CompromissoResponse é uma conta com data marcada.
+type CompromissoResponse struct {
+	Tipo      string        `json:"tipo" doc:"parcela | fatura" example:"parcela"`
+	Data      string        `json:"data" example:"2026-10-09"`
+	Valor     MoneyResponse `json:"valor"`
+	Titulo    string        `json:"titulo" doc:"O que aparece no aviso" example:"Academia"`
+	Categoria string        `json:"categoria" example:"saude"`
+
+	ParcelamentoID string `json:"parcelamento_id,omitempty"`
+	NumeroParcela  int    `json:"numero_parcela,omitempty"`
+
+	CartaoID    string `json:"cartao_id,omitempty"`
+	Competencia string `json:"competencia,omitempty" example:"2026-10"`
+}
+
+// AgendaResponse é o que vence daqui para a frente.
+type AgendaResponse struct {
+	Inicio string                `json:"inicio" example:"2026-09-21"`
+	Fim    string                `json:"fim" example:"2027-03-21"`
+	Itens  []CompromissoResponse `json:"itens"`
+}
+
+// NewAgendaResponse converte a agenda.
+func NewAgendaResponse(a *domain.Agenda) AgendaResponse {
+	out := AgendaResponse{
+		Inicio: a.Inicio.Format("2006-01-02"),
+		Fim:    a.Fim.Format("2006-01-02"),
+		Itens:  make([]CompromissoResponse, 0, len(a.Itens)),
+	}
+	for _, i := range a.Itens {
+		out.Itens = append(out.Itens, CompromissoResponse{
+			Tipo: string(i.Tipo), Data: i.Data.Format("2006-01-02"),
+			Valor: NewMoney(i.Valor), Titulo: i.Titulo, Categoria: i.Categoria,
+			ParcelamentoID: i.ParcelamentoID, NumeroParcela: i.NumeroParcela,
+			CartaoID: i.CartaoID, Competencia: i.Competencia,
+		})
+	}
+	return out
+}
+
 // CategoriaResponse agrega por categoria.
 type CategoriaResponse struct {
 	Categoria string        `json:"categoria" example:"mercado"`

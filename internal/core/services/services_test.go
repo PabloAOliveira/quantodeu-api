@@ -354,8 +354,21 @@ func (f *fakeTransacoes) SaldoAte(_ context.Context, userID string, ate time.Tim
 func (f *fakeTransacoes) TotaisPorCategoria(context.Context, string, time.Time, time.Time) ([]domain.TotalCategoria, error) {
 	return nil, nil
 }
-func (f *fakeTransacoes) ListParcelas(context.Context, string, time.Time, time.Time) ([]*domain.Transacao, error) {
-	return nil, nil
+func (f *fakeTransacoes) ListParcelas(_ context.Context, userID string, ini, fim time.Time) ([]*domain.Transacao, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []*domain.Transacao
+	for _, x := range f.items {
+		if x.UserID != userID || x.ParcelamentoID == nil {
+			continue
+		}
+		if x.Data.Before(ini) || !x.Data.Before(fim) {
+			continue
+		}
+		cp := *x
+		out = append(out, &cp)
+	}
+	return out, nil
 }
 
 // fakeSender entrega as mensagens num canal (o envio do webhook é assíncrono).

@@ -128,6 +128,9 @@ type UpdateTransacaoInput struct {
 // ResumoUseCase é a porta primária do resumo mensal.
 type ResumoUseCase interface {
 	GetResumo(ctx context.Context, userID string, ano, mes int) (*domain.Resumo, error)
+	// GetAgenda lista o que vence nos próximos `meses` — é o que o app usa
+	// para agendar as notificações no aparelho.
+	GetAgenda(ctx context.Context, userID string, meses int) (*domain.Agenda, error)
 }
 
 // CreateParcelamentoInput são os dados de uma despesa parcelada/recorrente.

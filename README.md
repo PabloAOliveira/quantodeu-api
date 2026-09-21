@@ -129,6 +129,20 @@ Três regras que valem a pena conhecer:
 As compras ficam em `compras_cartao`, fora de `transacoes`, justamente porque lá
 vale "toda linha mexe no saldo" e `SaldoAte` depende disso.
 
+## Agenda de vencimentos
+
+`GET /agenda?meses=6` devolve, numa consulta só, o que ainda vai vencer:
+parcelas de parcelamentos/financiamentos (que já existem como lançamentos
+futuros) e faturas de cartão com saldo a pagar, ordenadas por data.
+
+Existe para o app agendar as notificações **no aparelho** — sem isso ele
+pediria o resumo de cada mês e as faturas de cada cartão só para descobrir as
+datas. O horizonte é limitado a 12 meses de propósito: um financiamento de 360
+parcelas encheria sozinho o limite de alarmes do Android.
+
+O bloco de cartões é opcional ali dentro: se ele falhar, as parcelas continuam
+saindo — um lembrete a menos é melhor que agenda nenhuma.
+
 ## Colocar no ar
 
 Servidor próprio (PC de casa com Linux Mint + Docker + túnel da Cloudflare):
