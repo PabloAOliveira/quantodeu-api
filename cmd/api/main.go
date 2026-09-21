@@ -232,6 +232,9 @@ func run() error {
 		return err
 	}
 	fin := services.NewFinancasServices(userRepo, transacaoRepo, parcelamentoRepo, sysClock, metrics, cfg.Timezone, log)
+	cartaoRepo := postgres.NewCartaoRepository(pool)
+	cartaoSvc := services.NewCartaoService(cartaoRepo, transacaoRepo, sysClock, cfg.Timezone, log)
+	fin.Resumo.ComCartoes(cartaoSvc)
 	verifier := services.NewPhoneVerificationService(services.PhoneVerificationDeps{
 		Users: userRepo, Store: verificationStore, Codes: codes, Sender: sender,
 		SenderEnabled: cfg.WhatsApp.ReplyMode != "off", Clock: sysClock, Metrics: metrics, Log: log,
@@ -252,6 +255,7 @@ func run() error {
 	router, _, err := httpadapter.NewRouter(httpadapter.RouterDeps{
 		Production:           cfg.IsProduction(),
 		WhatsAppBot:          cfg.WhatsApp.BotEnabled,
+		Cartoes:              handlers.NewCartaoHandler(cartaoSvc, log),
 		Version:              cfg.Version,
 		AllowedOrigins:       cfg.HTTP.AllowedOrigins,
 		TrustedProxies:       cfg.HTTP.TrustedProxies,

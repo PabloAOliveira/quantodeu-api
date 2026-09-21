@@ -34,6 +34,11 @@ var (
 	ErrEmailAlreadyVerified    = errors.New("e-mail já verificado")
 	ErrEmailDeliveryFailed     = errors.New("não foi possível enviar o e-mail agora; tente novamente em instantes")
 	ErrPasswordReuse           = errors.New("a nova senha deve ser diferente da atual")
+	ErrCartaoComHistorico      = errors.New("este cartão tem compras registradas; arquive-o em vez de excluir")
+	ErrFaturaJaPaga            = errors.New("esta fatura já foi paga")
+	ErrFaturaNaoPaga           = errors.New("esta fatura não tem pagamento registrado")
+	ErrFaturaVazia             = errors.New("esta fatura não tem compras")
+	ErrFaturaFechadaParaCompra = errors.New("esta fatura já foi paga; desfaça o pagamento antes de mexer nas compras dela")
 )
 
 // RetryAfterError indica que a operação foi temporariamente bloqueada

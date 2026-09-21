@@ -336,6 +336,7 @@ type ResumoResponse struct {
 	SaldoAtual       MoneyResponse       `json:"saldo_atual" doc:"Saldo considerando lançamentos até hoje"`
 	CustosParcelados MoneyResponse       `json:"custos_fixos_parcelados"`
 	Parcelas         []TransacaoResponse `json:"parcelas_do_mes"`
+	Cartoes          []CartaoResponse    `json:"cartoes,omitempty" doc:"Por cartão: a fatura a pagar e a que está acumulando. Compras no cartão NÃO entram em 'despesas' — o que entra é o pagamento da fatura, na data em que o dinheiro saiu."`
 	PorCategoria     []CategoriaResponse `json:"por_categoria"`
 }
 
@@ -344,6 +345,10 @@ func NewResumoResponse(r *domain.Resumo) ResumoResponse {
 	cats := make([]CategoriaResponse, 0, len(r.PorCategoria))
 	for _, c := range r.PorCategoria {
 		cats = append(cats, CategoriaResponse{Categoria: c.Categoria, Tipo: string(c.Tipo), Total: NewMoney(c.Total), Qtd: c.Qtd})
+	}
+	cartoes := make([]CartaoResponse, 0, len(r.Cartoes))
+	for _, c := range r.Cartoes {
+		cartoes = append(cartoes, NewCartaoResponse(c))
 	}
 	return ResumoResponse{
 		Referencia:       r.Periodo.Inicio.Format("2006-01"),
@@ -355,6 +360,7 @@ func NewResumoResponse(r *domain.Resumo) ResumoResponse {
 		CustosParcelados: NewMoney(r.CustosParcelados),
 		Parcelas:         NewTransacoesResponse(r.Parcelas),
 		PorCategoria:     cats,
+		Cartoes:          cartoes,
 	}
 }
 
@@ -588,6 +594,136 @@ type ParcelamentoDetalheResponse struct {
 // ListParcelamentosResponse lista parcelamentos.
 type ListParcelamentosResponse struct {
 	Items []ParcelamentoResponse `json:"items"`
+}
+
+// ---------------------------------------------------------------------------
+// Cartão de crédito
+// ---------------------------------------------------------------------------
+
+// CartaoRequest é o corpo de POST/PUT /cartoes.
+type CartaoRequest struct {
+	Nome          string `json:"nome" binding:"required,max=60" example:"Nubank"`
+	Banco         string `json:"banco" binding:"max=60" example:"Nu Pagamentos"`
+	DiaFechamento int    `json:"dia_fechamento" binding:"required,min=1,max=31" doc:"Dia em que a fatura fecha o ciclo de compras" example:"20"`
+	DiaVencimento int    `json:"dia_vencimento" binding:"required,min=1,max=31" doc:"Dia do pagamento. O vencimento é sempre a PRÓXIMA ocorrência dele após o fechamento — por isso o mesmo par de campos cobre 'fecha 20, vence 21' (mesmo mês) e 'fecha 28, vence 5' (mês seguinte)." example:"21"`
+	Limite        Money  `json:"limite" doc:"Opcional. Habilita o cálculo do limite disponível."`
+	Ativo         *bool  `json:"ativo" doc:"Só no PUT: false arquiva o cartão sem apagar o histórico."`
+}
+
+// CompraCartaoRequest é o corpo de POST /cartoes/{id}/compras.
+type CompraCartaoRequest struct {
+	Valor         Money  `json:"valor" doc:"Valor TOTAL da compra; parcelado, o resíduo de centavos vai na 1ª"`
+	Categoria     string `json:"categoria" binding:"max=60" example:"eletronicos"`
+	Descricao     string `json:"descricao" binding:"max=255" example:"Notebook"`
+	Data          *Date  `json:"data" doc:"Data da compra. Padrão: hoje. Compra DEPOIS do fechamento cai na fatura seguinte."`
+	TotalParcelas int    `json:"total_parcelas" binding:"omitempty,min=1,max=36" doc:"1 (padrão) = à vista" example:"3"`
+}
+
+// PagarFaturaRequest é o corpo de POST /cartoes/{id}/faturas/{ref}/pagar.
+type PagarFaturaRequest struct {
+	Data  *Date `json:"data" doc:"Data em que o dinheiro saiu da conta (padrão: hoje). É ELA que define em que mês o gasto aparece — não o vencimento da fatura."`
+	Valor Money `json:"valor" doc:"Opcional: o padrão é o total da fatura."`
+}
+
+// CartaoResponse representa um cartão.
+type CartaoResponse struct {
+	ID               string          `json:"id"`
+	Nome             string          `json:"nome" example:"Nubank"`
+	Banco            string          `json:"banco" example:"Nu Pagamentos"`
+	DiaFechamento    int             `json:"dia_fechamento" example:"20"`
+	DiaVencimento    int             `json:"dia_vencimento" example:"21"`
+	Limite           MoneyResponse   `json:"limite"`
+	Ativo            bool            `json:"ativo"`
+	CriadoEm         time.Time       `json:"criado_em"`
+	LimiteDisponivel MoneyResponse   `json:"limite_disponivel" doc:"Limite menos tudo que ainda não foi pago"`
+	MelhorDiaCompra  string          `json:"melhor_dia_compra" doc:"Dia seguinte ao fechamento: comprando nele você ganha o maior prazo até o pagamento" example:"2026-09-21"`
+	FaturaAPagar     *FaturaResponse `json:"fatura_a_pagar,omitempty" doc:"Fechada e ainda não paga (ausente quando não há)"`
+	FaturaEmAberto   *FaturaResponse `json:"fatura_em_aberto,omitempty" doc:"Ainda acumulando compras"`
+}
+
+// FaturaResponse é um ciclo do cartão.
+type FaturaResponse struct {
+	Competencia string                 `json:"competencia" example:"2026-10"`
+	Vencimento  string                 `json:"vencimento" example:"2026-10-21"`
+	InicioCiclo string                 `json:"inicio_ciclo" example:"2026-09-21"`
+	FimCiclo    string                 `json:"fim_ciclo" doc:"Fechamento: compras após esta data caem na fatura seguinte" example:"2026-10-20"`
+	Total       MoneyResponse          `json:"total"`
+	Status      string                 `json:"status" doc:"aberta | fechada | paga" example:"fechada"`
+	PagoEm      string                 `json:"pago_em,omitempty" example:"2026-10-20"`
+	Compras     []CompraCartaoResponse `json:"compras,omitempty"`
+}
+
+// CompraCartaoResponse é uma parcela de uma compra.
+type CompraCartaoResponse struct {
+	ID            string        `json:"id"`
+	GrupoID       string        `json:"grupo_id" doc:"Mesmo em todas as parcelas de uma compra; use para excluir a compra inteira"`
+	Valor         MoneyResponse `json:"valor" doc:"Valor DESTA parcela"`
+	Categoria     string        `json:"categoria"`
+	Descricao     string        `json:"descricao"`
+	Data          string        `json:"data" doc:"Data da compra" example:"2026-09-15"`
+	NumeroParcela int           `json:"numero_parcela" example:"1"`
+	TotalParcelas int           `json:"total_parcelas" example:"3"`
+}
+
+// NewCartaoResponse converte o resumo do cartão.
+func NewCartaoResponse(r *domain.ResumoCartao) CartaoResponse {
+	c := r.Cartao
+	out := CartaoResponse{
+		ID: c.ID, Nome: c.Nome, Banco: c.Banco,
+		DiaFechamento: c.DiaFechamento, DiaVencimento: c.DiaVencimento,
+		Limite: NewMoney(c.Limite), Ativo: c.Ativo, CriadoEm: c.CreatedAt,
+		LimiteDisponivel: NewMoney(r.LimiteDisponivel),
+		MelhorDiaCompra:  r.MelhorDiaCompra.Format("2006-01-02"),
+	}
+	if r.APagar != nil {
+		f := NewFaturaResponse(r.APagar)
+		out.FaturaAPagar = &f
+	}
+	if r.EmAberto != nil {
+		f := NewFaturaResponse(r.EmAberto)
+		out.FaturaEmAberto = &f
+	}
+	return out
+}
+
+// NewFaturaResponse converte uma fatura.
+func NewFaturaResponse(f *domain.Fatura) FaturaResponse {
+	out := FaturaResponse{
+		Competencia: f.Competencia,
+		Vencimento:  f.Vencimento.Format("2006-01-02"),
+		InicioCiclo: f.InicioCiclo.Format("2006-01-02"),
+		FimCiclo:    f.FimCiclo.Format("2006-01-02"),
+		Total:       NewMoney(f.Total),
+		Status:      string(f.Status),
+	}
+	if f.Pagamento != nil {
+		out.PagoEm = f.Pagamento.PagoEm.Format("2006-01-02")
+	}
+	for _, c := range f.Compras {
+		out.Compras = append(out.Compras, CompraCartaoResponse{
+			ID: c.ID, GrupoID: c.GrupoID, Valor: NewMoney(c.Valor),
+			Categoria: c.Categoria, Descricao: c.Descricao,
+			Data:          c.DataCompra.Format("2006-01-02"),
+			NumeroParcela: c.NumeroParcela, TotalParcelas: c.TotalParcelas,
+		})
+	}
+	return out
+}
+
+// ListCartoesResponse lista cartões.
+type ListCartoesResponse struct {
+	Items []CartaoResponse `json:"items"`
+}
+
+// ListFaturasResponse lista faturas (sem as compras).
+type ListFaturasResponse struct {
+	Items []FaturaResponse `json:"items"`
+}
+
+// CompraCriadaResponse devolve as parcelas geradas.
+type CompraCriadaResponse struct {
+	GrupoID  string                 `json:"grupo_id"`
+	Parcelas []CompraCartaoResponse `json:"parcelas"`
 }
 
 // ---------------------------------------------------------------------------

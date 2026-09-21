@@ -32,7 +32,16 @@ type financasBase struct {
 type TransacaoService struct{ *financasBase }
 
 // ResumoService implementa ports.ResumoUseCase e ports.ProfileUseCase.
-type ResumoService struct{ *financasBase }
+type ResumoService struct {
+	*financasBase
+	// cartoes é opcional: quando nil, o resumo simplesmente não traz o bloco.
+	cartoes ports.CartaoUseCase
+}
+
+// ComCartoes liga o bloco de cartões no resumo. Fica separado do construtor
+// porque o CartaoService depende do repositório de transações, que já é criado
+// aqui dentro — ligar depois evita uma dependência circular na montagem.
+func (s *ResumoService) ComCartoes(c ports.CartaoUseCase) { s.cartoes = c }
 
 // ParcelamentoService implementa ports.ParcelamentoUseCase.
 type ParcelamentoService struct{ *financasBase }
@@ -71,7 +80,7 @@ func NewFinancasServices(
 	b := &financasBase{users: users, transacoes: transacoes, parcelamentos: parcelamentos, clock: clock, metrics: metrics, loc: loc, log: log}
 	return FinancasServices{
 		Transacoes:    &TransacaoService{b},
-		Resumo:        &ResumoService{b},
+		Resumo:        &ResumoService{financasBase: b},
 		Parcelamentos: &ParcelamentoService{b},
 	}
 }
@@ -225,6 +234,17 @@ func (s *ResumoService) GetResumo(ctx context.Context, userID string, ano, mes i
 		return nil, fmt.Errorf("resumo: saldo atual: %w", err)
 	}
 
+	var cartoes []*domain.ResumoCartao
+	if s.cartoes != nil {
+		// Uma falha aqui não pode derrubar o resumo inteiro: o bloco de cartões
+		// é um extra, e saldo e despesas continuam corretos sem ele.
+		if c, err := s.cartoes.List(ctx, userID); err != nil {
+			s.log.WarnContext(ctx, "resumo: bloco de cartões indisponível", slog.Any("err", err))
+		} else {
+			cartoes = c
+		}
+	}
+
 	return &domain.Resumo{
 		Periodo:          periodo,
 		Receitas:         totais.Entradas,
@@ -235,6 +255,7 @@ func (s *ResumoService) GetResumo(ctx context.Context, userID string, ano, mes i
 		CustosParcelados: totais.SaidasParceladas,
 		Parcelas:         parcelas,
 		PorCategoria:     porCategoria,
+		Cartoes:          cartoes,
 	}, nil
 }
 

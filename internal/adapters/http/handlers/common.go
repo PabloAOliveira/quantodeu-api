@@ -25,6 +25,16 @@ import (
 
 // bindJSON decodifica estritamente (rejeita campos desconhecidos e lixo após
 // o objeto) e aplica as validações das tags `binding`.
+// bindJSONOpcional aceita requisição SEM corpo, para rotas em que todo campo é
+// opcional — obrigar o cliente a mandar um "{}" só para dizer "use o padrão"
+// seria cerimônia à toa.
+func bindJSONOpcional(c *gin.Context, dst any) error {
+	if c.Request.Body == nil || c.Request.ContentLength == 0 {
+		return nil
+	}
+	return bindJSON(c, dst)
+}
+
 func bindJSON(c *gin.Context, dst any) error {
 	dec := json.NewDecoder(c.Request.Body)
 	dec.DisallowUnknownFields()
@@ -151,6 +161,16 @@ func respondError(c *gin.Context, log *slog.Logger, err error) {
 		write(http.StatusUnprocessableEntity, "verification_method_unavailable", err.Error(), "metodo")
 	case errors.Is(err, domain.ErrEmailNotVerified):
 		write(http.StatusForbidden, "email_nao_verificado", err.Error(), "")
+	case errors.Is(err, domain.ErrCartaoComHistorico):
+		write(http.StatusConflict, "cartao_com_historico", err.Error(), "")
+	case errors.Is(err, domain.ErrFaturaJaPaga):
+		write(http.StatusConflict, "fatura_ja_paga", err.Error(), "")
+	case errors.Is(err, domain.ErrFaturaNaoPaga):
+		write(http.StatusConflict, "fatura_nao_paga", err.Error(), "")
+	case errors.Is(err, domain.ErrFaturaFechadaParaCompra):
+		write(http.StatusConflict, "fatura_fechada_para_compra", err.Error(), "")
+	case errors.Is(err, domain.ErrFaturaVazia):
+		write(http.StatusUnprocessableEntity, "fatura_vazia", err.Error(), "")
 	case errors.Is(err, domain.ErrEmailAlreadyVerified):
 		write(http.StatusConflict, "email_already_verified", err.Error(), "")
 	case errors.Is(err, domain.ErrEmailDeliveryFailed):

@@ -89,6 +89,36 @@ válido é o prazo encurtado). **No PUT, omitir o campo volta para zero** e as
 parcelas antigas são lançadas de novo — a mesma pegadinha do bloco
 `financiamento`: quem edita reenvia.
 
+## Cartão de crédito
+
+A compra no cartão **não mexe no saldo**: ela é dívida com o banco. O dinheiro
+só se move quando a fatura é paga — e é isso que resolve o descompasso entre
+comprar num mês e pagar no outro.
+
+```
+POST /cartoes/{id}/compras                 -> não altera saldo nem despesas
+POST /cartoes/{id}/faturas/2026-09/pagar   -> cria UMA saída na data do pagamento
+```
+
+A saída nasce na **data do pagamento**, não no vencimento nem no mês das
+compras. Por isso a fatura de setembro paga em outubro aparece nas despesas de
+outubro: foi em outubro que o dinheiro saiu da conta.
+
+Três regras que valem a pena conhecer:
+
+- **Vencimento é a próxima ocorrência do dia após o fechamento.** O mesmo par de
+  campos cobre "fecha 20, vence 21" (mesmo mês) e "fecha 28, vence 5" (mês
+  seguinte), sem perguntar nada a mais ao usuário.
+- **Compra depois do fechamento cai na fatura seguinte.** É a regra que mais
+  confunde na vida real e a que tem teste dedicado, incluindo um que percorre
+  todos os dias de um ano em quatro configurações de cartão para garantir que
+  nenhum dia fique fora de um ciclo — nem em dois.
+- **A fatura é derivada**, nunca armazenada: ela sai do cartão + das compras,
+  como o progresso do parcelamento. O único fato gravado é o pagamento.
+
+As compras ficam em `compras_cartao`, fora de `transacoes`, justamente porque lá
+vale "toda linha mexe no saldo" e `SaldoAte` depende disso.
+
 ## Colocar no ar
 
 Servidor próprio (PC de casa com Linux Mint + Docker + túnel da Cloudflare):

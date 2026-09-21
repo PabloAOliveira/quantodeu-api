@@ -196,6 +196,63 @@ type ParcelamentoUseCase interface {
 }
 
 // ---------------------------------------------------------------------------
+// Cartão de crédito
+// ---------------------------------------------------------------------------
+
+// CreateCartaoInput são os dados de cadastro/edição de um cartão.
+type CreateCartaoInput struct {
+	Nome          string
+	Banco         string
+	DiaFechamento int
+	DiaVencimento int
+	Limite        domain.Money
+	Ativo         *bool // nil = mantém (só faz sentido no update)
+}
+
+// CreateCompraInput é uma compra no cartão (1 ou mais parcelas).
+type CreateCompraInput struct {
+	Valor         domain.Money // valor TOTAL da compra
+	Categoria     string
+	Descricao     string
+	Data          *time.Time // nil = hoje
+	TotalParcelas int        // 0 ou 1 = à vista
+}
+
+// PagarFaturaInput registra o pagamento de uma fatura.
+type PagarFaturaInput struct {
+	// Data em que o dinheiro saiu da conta. nil = hoje. É ESTA data que define
+	// em que mês o gasto aparece — não o vencimento da fatura.
+	Data *time.Time
+	// Valor pago. Zero = o total da fatura.
+	Valor domain.Money
+}
+
+// CartaoUseCase é a porta primária de cartões e faturas.
+type CartaoUseCase interface {
+	Create(ctx context.Context, userID string, in CreateCartaoInput) (*domain.Cartao, error)
+	List(ctx context.Context, userID string) ([]*domain.ResumoCartao, error)
+	Get(ctx context.Context, userID, id string) (*domain.ResumoCartao, error)
+	Update(ctx context.Context, userID, id string, in CreateCartaoInput) (*domain.Cartao, error)
+	// Delete remove o cartão. Com histórico, devolve domain.ErrCartaoComHistorico
+	// — o certo é arquivar (Update com Ativo=false).
+	Delete(ctx context.Context, userID, id string) error
+
+	// Faturas lista as faturas com movimento, da mais recente para a mais antiga.
+	Faturas(ctx context.Context, userID, cartaoID string) ([]*domain.Fatura, error)
+	// Fatura devolve uma competência ("2026-10") com as compras dela.
+	Fatura(ctx context.Context, userID, cartaoID, competencia string) (*domain.Fatura, error)
+	// PagarFatura cria a saída no saldo e marca a fatura como paga.
+	PagarFatura(ctx context.Context, userID, cartaoID, competencia string, in PagarFaturaInput) (*domain.Fatura, error)
+	// DesfazerPagamento remove a saída e volta a fatura para fechada.
+	DesfazerPagamento(ctx context.Context, userID, cartaoID, competencia string) error
+
+	// RegistrarCompra grava a compra (uma linha por parcela).
+	RegistrarCompra(ctx context.Context, userID, cartaoID string, in CreateCompraInput) ([]*domain.CompraCartao, error)
+	// ExcluirCompra remove a compra inteira pelo grupo (todas as parcelas).
+	ExcluirCompra(ctx context.Context, userID, grupoID string) (int64, error)
+}
+
+// ---------------------------------------------------------------------------
 // Verificação de telefone
 // ---------------------------------------------------------------------------
 

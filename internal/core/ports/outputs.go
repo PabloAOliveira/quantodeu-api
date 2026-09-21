@@ -159,6 +159,38 @@ type Clock interface {
 	Now() time.Time
 }
 
+// CartaoRepository persiste cartões, compras e pagamentos de fatura.
+type CartaoRepository interface {
+	Create(ctx context.Context, userID string, c *domain.Cartao) error
+	FindByID(ctx context.Context, userID, id string) (*domain.Cartao, error)
+	List(ctx context.Context, userID string) ([]*domain.Cartao, error)
+	Update(ctx context.Context, userID string, c *domain.Cartao) error
+	Delete(ctx context.Context, userID, id string) error
+
+	// CreateCompras grava todas as parcelas de uma compra atomicamente.
+	CreateCompras(ctx context.Context, userID string, compras []*domain.CompraCartao) error
+	// ComprasDaFatura devolve as parcelas de um vencimento.
+	ComprasDaFatura(ctx context.Context, userID, cartaoID string, vencimento time.Time) ([]*domain.CompraCartao, error)
+	// ResumoDasFaturas devolve, numa consulta só, o total e o pagamento de cada
+	// fatura com movimento — da mais recente para a mais antiga.
+	ResumoDasFaturas(ctx context.Context, userID, cartaoID string) ([]domain.FaturaResumo, error)
+	// TotalNaoPago soma as compras de faturas sem pagamento registrado — é o
+	// que está comprometido do limite.
+	TotalNaoPago(ctx context.Context, userID, cartaoID string) (domain.Money, error)
+	// GrupoTemFaturaPaga informa se alguma parcela da compra caiu numa fatura
+	// já paga — mexer nela mudaria um total que já virou dinheiro.
+	GrupoTemFaturaPaga(ctx context.Context, userID, grupoID string) (bool, error)
+	// DeleteCompraGrupo remove todas as parcelas de uma compra.
+	DeleteCompraGrupo(ctx context.Context, userID, grupoID string) (int64, error)
+
+	// PagamentoDaFatura devolve nil quando a fatura não foi paga.
+	PagamentoDaFatura(ctx context.Context, userID, cartaoID string, vencimento time.Time) (*domain.PagamentoFatura, error)
+	// RegistrarPagamento grava a transação de saída e o pagamento atomicamente.
+	RegistrarPagamento(ctx context.Context, userID string, t *domain.Transacao, pag *domain.PagamentoFatura) error
+	// RemoverPagamento apaga o pagamento e a transação de saída.
+	RemoverPagamento(ctx context.Context, userID, cartaoID string, vencimento time.Time) error
+}
+
 // WhatsAppSender envia mensagens ao usuário (confirmações, códigos).
 type WhatsAppSender interface {
 	SendText(ctx context.Context, telefone, texto string) error

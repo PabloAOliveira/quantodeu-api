@@ -391,3 +391,103 @@ func TestParcelamentoRepository_ParcelasJaPagas(t *testing.T) {
 		t.Fatalf("progresso = %+v", pr)
 	}
 }
+
+// Cartão de crédito: isolamento entre contas e atomicidade do pagamento.
+func TestCartaoRepository_IsolamentoEPagamento(t *testing.T) {
+	_, app := setupPools(t)
+	ctx := context.Background()
+	users := NewUserRepository(app)
+	cartoes := NewCartaoRepository(app)
+	txs := NewTransacaoRepository(app)
+	a := novoUsuario(t, users, "a")
+	b := novoUsuario(t, users, "b")
+	hoje := domain.DateOnly(time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC))
+
+	cartao, err := domain.NewCartao(domain.NewCartaoInput{UserID: a.ID, Nome: "Nubank",
+		DiaFechamento: 20, DiaVencimento: 21, Limite: 500000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cartoes.Create(ctx, a.ID, cartao); err != nil {
+		t.Fatal(err)
+	}
+
+	// B não enxerga, não busca e não apaga o cartão de A.
+	if lista, _ := cartoes.List(ctx, b.ID); len(lista) != 0 {
+		t.Fatal("usuário B enxergou cartões de A")
+	}
+	if _, err := cartoes.FindByID(ctx, b.ID, cartao.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("B buscou cartão de A: %v", err)
+	}
+	if err := cartoes.Delete(ctx, b.ID, cartao.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("B excluiu cartão de A: %v", err)
+	}
+
+	compras, err := domain.NewCompraCartao(cartao, domain.NewCompraInput{
+		UserID: a.ID, CartaoID: cartao.ID, Valor: 60000, Categoria: "mercado",
+		Descricao: "Compras", DataCompra: hoje, TotalParcelas: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cartoes.CreateCompras(ctx, a.ID, compras); err != nil {
+		t.Fatal(err)
+	}
+	venc := compras[0].FaturaVencimento
+
+	// B não vê as compras nem o total comprometido de A.
+	if lista, _ := cartoes.ComprasDaFatura(ctx, b.ID, cartao.ID, venc); len(lista) != 0 {
+		t.Fatal("B enxergou compras de A")
+	}
+	if total, _ := cartoes.TotalNaoPago(ctx, b.ID, cartao.ID); total != 0 {
+		t.Fatalf("B viu o comprometido de A: %d", total)
+	}
+	if total, err := cartoes.TotalNaoPago(ctx, a.ID, cartao.ID); err != nil || total != 60000 {
+		t.Fatalf("comprometido de A = %d, %v; queria 60000", total, err)
+	}
+
+	// Pagamento: a saída no saldo e o registro entram juntos.
+	saldoAntes, _ := txs.SaldoAte(ctx, a.ID, hoje.AddDate(0, 0, 1))
+	pagamento := &domain.PagamentoFatura{UserID: a.ID, CartaoID: cartao.ID,
+		Vencimento: venc, Valor: 30000, PagoEm: hoje}
+	saida, err := domain.NewTransacao(domain.NewTransacaoInput{UserID: a.ID,
+		Tipo: domain.TipoSaida, Valor: 30000, Categoria: "cartão de crédito",
+		Descricao: "Fatura Nubank", Data: hoje, Origem: domain.OrigemManual})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cartoes.RegistrarPagamento(ctx, a.ID, saida, pagamento); err != nil {
+		t.Fatal(err)
+	}
+	saldoDepois, _ := txs.SaldoAte(ctx, a.ID, hoje.AddDate(0, 0, 1))
+	if saldoAntes-saldoDepois != 30000 {
+		t.Fatalf("o pagamento não saiu do saldo: antes %d, depois %d", saldoAntes, saldoDepois)
+	}
+
+	// Pagar de novo a mesma fatura é bloqueado pela chave primária.
+	if err := cartoes.RegistrarPagamento(ctx, a.ID, saida, pagamento); !errors.Is(err, domain.ErrFaturaJaPaga) {
+		t.Fatalf("pagamento duplicado: %v", err)
+	}
+	// B não desfaz o pagamento de A.
+	if err := cartoes.RemoverPagamento(ctx, b.ID, cartao.ID, venc); !errors.Is(err, domain.ErrFaturaNaoPaga) {
+		t.Fatalf("B removeu pagamento de A: %v", err)
+	}
+
+	// Desfazer devolve o saldo: a transação some junto.
+	if err := cartoes.RemoverPagamento(ctx, a.ID, cartao.ID, venc); err != nil {
+		t.Fatal(err)
+	}
+	if saldoFinal, _ := txs.SaldoAte(ctx, a.ID, hoje.AddDate(0, 0, 1)); saldoFinal != saldoAntes {
+		t.Fatalf("saldo após desfazer = %d; queria %d", saldoFinal, saldoAntes)
+	}
+	if _, err := cartoes.PagamentoDaFatura(ctx, a.ID, cartao.ID, venc); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("pagamento sobreviveu: %v", err)
+	}
+
+	// B não apaga as compras de A.
+	if n, _ := cartoes.DeleteCompraGrupo(ctx, b.ID, compras[0].GrupoID); n != 0 {
+		t.Fatalf("B apagou %d compras de A", n)
+	}
+	if n, err := cartoes.DeleteCompraGrupo(ctx, a.ID, compras[0].GrupoID); err != nil || n != 2 {
+		t.Fatalf("apagar a compra inteira removeu %d parcelas, %v", n, err)
+	}
+}

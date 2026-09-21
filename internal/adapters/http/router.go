@@ -52,6 +52,7 @@ type RouterDeps struct {
 	RequireVerifiedEmail bool
 	AuthHandler          *handlers.AuthHandler
 	Financas             *handlers.FinancasHandler
+	Cartoes              *handlers.CartaoHandler
 	Webhook              *handlers.WebhookHandler
 	Health               *handlers.HealthHandler
 }
@@ -223,6 +224,48 @@ func NewRouter(d RouterDeps) (*gin.Engine, *openapi.Doc, error) {
 	reg(openapi.Route{Method: http.MethodPost, Path: "/parcelamentos", OperationID: "createParcelamento", Summary: "Registrar parcelamento, despesa recorrente ou financiamento", Tags: pc,
 		Description: "Com o bloco `financiamento`, as parcelas são projetadas por juros (SAC ou Price) e cada mês pode ter um valor diferente.",
 		Body:        dto.CreateParcelamentoRequest{}, Responses: map[int]openapi.Response{201: {Description: "Criado com as parcelas", Body: dto.ParcelamentoDetalheResponse{}}}}, d.Financas.CreateParcelamento)
+	cartoes := []string{"Cartões"}
+	reg(openapi.Route{Method: http.MethodGet, Path: "/cartoes", OperationID: "listCartoes",
+		Summary: "Listar cartões", Tags: cartoes,
+		Description: "Cada cartão vem com as duas faturas que convivem em qualquer mês: a **fechada** (a pagar) e a **em aberto** (ainda acumulando), mais o limite disponível e o melhor dia de compra.",
+		Responses:   map[int]openapi.Response{200: {Description: "Cartões", Body: dto.ListCartoesResponse{}}}}, d.Cartoes.ListCartoes)
+	reg(openapi.Route{Method: http.MethodPost, Path: "/cartoes", OperationID: "createCartao",
+		Summary: "Cadastrar cartão", Tags: cartoes, Body: dto.CartaoRequest{},
+		Responses: map[int]openapi.Response{201: {Description: "Cartão criado", Body: dto.CartaoResponse{}}}}, d.Cartoes.CreateCartao)
+	reg(openapi.Route{Method: http.MethodGet, Path: "/cartoes/:id", OperationID: "getCartao",
+		Summary: "Detalhar cartão", Tags: cartoes,
+		Responses: map[int]openapi.Response{200: {Description: "Cartão", Body: dto.CartaoResponse{}}}}, d.Cartoes.GetCartao)
+	reg(openapi.Route{Method: http.MethodPut, Path: "/cartoes/:id", OperationID: "updateCartao",
+		Summary: "Editar cartão (ou arquivar com ativo=false)", Tags: cartoes, Body: dto.CartaoRequest{},
+		Responses: map[int]openapi.Response{200: {Description: "Cartão atualizado", Body: dto.CartaoResponse{}}}}, d.Cartoes.UpdateCartao)
+	reg(openapi.Route{Method: http.MethodDelete, Path: "/cartoes/:id", OperationID: "deleteCartao",
+		Summary: "Excluir cartão", Tags: cartoes,
+		Description: "Só funciona em cartão sem compras. Com histórico devolve 409 `cartao_com_historico` — o certo é arquivar (PUT com `ativo: false`), para não apagar o passado financeiro.",
+		Responses:   map[int]openapi.Response{204: {Description: "Removido"}}, Errors: []int{http.StatusConflict}}, d.Cartoes.DeleteCartao)
+
+	reg(openapi.Route{Method: http.MethodGet, Path: "/cartoes/:id/faturas", OperationID: "listFaturas",
+		Summary: "Histórico de faturas", Tags: cartoes,
+		Responses: map[int]openapi.Response{200: {Description: "Faturas, da mais recente para a mais antiga", Body: dto.ListFaturasResponse{}}}}, d.Cartoes.ListFaturas)
+	reg(openapi.Route{Method: http.MethodGet, Path: "/cartoes/:id/faturas/:competencia", OperationID: "getFatura",
+		Summary: "Detalhar fatura de uma competência (AAAA-MM)", Tags: cartoes,
+		Responses: map[int]openapi.Response{200: {Description: "Fatura com as compras", Body: dto.FaturaResponse{}}}}, d.Cartoes.GetFatura)
+	reg(openapi.Route{Method: http.MethodPost, Path: "/cartoes/:id/faturas/:competencia/pagar", OperationID: "pagarFatura",
+		Summary: "Marcar fatura como paga", Tags: cartoes, Body: dto.PagarFaturaRequest{},
+		Description: "Cria UMA saída no saldo na data do pagamento. É esse lançamento que entra nas despesas do mês — a compra no cartão, não. Por isso a fatura de setembro paga em outubro aparece nas despesas de outubro.",
+		Responses:   map[int]openapi.Response{200: {Description: "Fatura paga", Body: dto.FaturaResponse{}}}, Errors: []int{http.StatusConflict, http.StatusUnprocessableEntity}}, d.Cartoes.PagarFatura)
+	reg(openapi.Route{Method: http.MethodDelete, Path: "/cartoes/:id/faturas/:competencia/pagar", OperationID: "desfazerPagamentoFatura",
+		Summary: "Desfazer o pagamento da fatura", Tags: cartoes,
+		Description: "Remove a saída do saldo e devolve a fatura para 'fechada'.",
+		Responses:   map[int]openapi.Response{204: {Description: "Pagamento desfeito"}}, Errors: []int{http.StatusConflict}}, d.Cartoes.DesfazerPagamento)
+
+	reg(openapi.Route{Method: http.MethodPost, Path: "/cartoes/:id/compras", OperationID: "createCompraCartao",
+		Summary: "Lançar compra no cartão", Tags: cartoes, Body: dto.CompraCartaoRequest{},
+		Description: "NÃO mexe no saldo: compra no cartão é dívida com o banco. Parcelada, gera uma linha por parcela em faturas consecutivas. Compra feita DEPOIS do fechamento cai na fatura seguinte.",
+		Responses:   map[int]openapi.Response{201: {Description: "Compra registrada", Body: dto.CompraCriadaResponse{}}}}, d.Cartoes.CreateCompra)
+	reg(openapi.Route{Method: http.MethodDelete, Path: "/compras/:grupo", OperationID: "deleteCompraCartao",
+		Summary: "Excluir compra (todas as parcelas)", Tags: cartoes,
+		Responses: map[int]openapi.Response{204: {Description: "Removida"}}}, d.Cartoes.DeleteCompra)
+
 	reg(openapi.Route{Method: http.MethodPost, Path: "/parcelamentos/simular", OperationID: "simularFinanciamento", Summary: "Simular financiamento (não grava nada)", Tags: pc,
 		Description: "Projeta a tabela de amortização a partir do valor financiado, prazo, taxa anual e sistema (SAC ou Price). Use para mostrar a parcela antes de cadastrar.",
 		Body:        dto.SimularFinanciamentoRequest{}, Responses: map[int]openapi.Response{200: {Description: "Projeção", Body: dto.SimulacaoResponse{}}}}, d.Financas.SimularFinanciamento)

@@ -28,6 +28,10 @@ type Resumo struct {
 	CustosParcelados Money
 	Parcelas         []*Transacao
 	PorCategoria     []TotalCategoria
+	// Cartoes traz, por cartão, a fatura a pagar e a que está acumulando.
+	// Compras no cartão NÃO entram em Despesas: o que entra é o pagamento da
+	// fatura, na data em que o dinheiro saiu.
+	Cartoes []*ResumoCartao
 }
 
 // Perfil é a visão do usuário logado exibida em /me.
