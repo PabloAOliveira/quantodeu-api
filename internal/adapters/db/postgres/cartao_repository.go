@@ -235,13 +235,18 @@ func (r *CartaoRepository) ResumoDasFaturas(ctx context.Context, userID, cartaoI
 	err := withTenant(ctx, r.db, userID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
 			SELECT c.fatura_vencimento, sum(c.valor_centavos),
-			       p.transacao_id, p.valor_centavos, p.pago_em
+			       COALESCE(p.pago, 0), p.ultimo, COALESCE(p.ultimo_valor, 0)
 			FROM compras_cartao c
-			LEFT JOIN pagamentos_fatura p
-			  ON p.user_id = c.user_id AND p.cartao_id = c.cartao_id
-			 AND p.vencimento = c.fatura_vencimento
+			LEFT JOIN (
+			    SELECT vencimento, sum(valor_centavos) AS pago, max(pago_em) AS ultimo,
+			           (array_agg(valor_centavos ORDER BY pago_em DESC, created_at DESC))[1]
+			               AS ultimo_valor
+			    FROM pagamentos_fatura
+			    WHERE user_id = $1 AND cartao_id = $2
+			    GROUP BY vencimento
+			) p ON p.vencimento = c.fatura_vencimento
 			WHERE c.user_id = $1 AND c.cartao_id = $2
-			GROUP BY c.fatura_vencimento, p.transacao_id, p.valor_centavos, p.pago_em
+			GROUP BY c.fatura_vencimento, p.pago, p.ultimo, p.ultimo_valor
 			ORDER BY c.fatura_vencimento DESC
 			LIMIT 120`, userID, cartaoID)
 		if err != nil {
@@ -250,22 +255,16 @@ func (r *CartaoRepository) ResumoDasFaturas(ctx context.Context, userID, cartaoI
 		defer rows.Close()
 		for rows.Next() {
 			var f domain.FaturaResumo
-			var total int64
-			var transacaoID *string
-			var valorPago *int64
-			var pagoEm *time.Time
-			if err := rows.Scan(&f.Vencimento, &total, &transacaoID, &valorPago, &pagoEm); err != nil {
+			var total, pago, ultimoValor int64
+			var ultimo *time.Time
+			if err := rows.Scan(&f.Vencimento, &total, &pago, &ultimo, &ultimoValor); err != nil {
 				return err
 			}
 			f.Total = domain.Money(total)
-			if transacaoID != nil && pagoEm != nil {
-				f.Pagamento = &domain.PagamentoFatura{
-					UserID: userID, CartaoID: cartaoID, Vencimento: f.Vencimento,
-					TransacaoID: *transacaoID, PagoEm: *pagoEm,
-				}
-				if valorPago != nil {
-					f.Pagamento.Valor = domain.Money(*valorPago)
-				}
+			f.Pago = domain.Money(pago)
+			f.UltimoPagamentoValor = domain.Money(ultimoValor)
+			if ultimo != nil {
+				f.UltimoPagamentoEm = *ultimo
 			}
 			out = append(out, f)
 		}
@@ -280,19 +279,26 @@ func (r *CartaoRepository) ResumoDasFaturas(ctx context.Context, userID, cartaoI
 	return out, nil
 }
 
-// TotalNaoPago soma as compras cujas faturas ainda não foram pagas — é o que
-// está comprometido do limite.
+// TotalNaoPago soma o que ainda falta pagar em cada fatura — é o que está
+// comprometido do limite.
+//
+// A conta é por fatura, não no bolo: pagar R$ 450 numa fatura de R$ 433 não
+// libera limite das outras, e uma fatura paga pela metade continua segurando
+// só a metade que falta.
 func (r *CartaoRepository) TotalNaoPago(ctx context.Context, userID, cartaoID string) (domain.Money, error) {
 	var total int64
 	err := withTenant(ctx, r.db, userID, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `
-			SELECT COALESCE(sum(c.valor_centavos), 0)
-			FROM compras_cartao c
-			WHERE c.user_id = $1 AND c.cartao_id = $2
-			  AND NOT EXISTS (
-			      SELECT 1 FROM pagamentos_fatura p
-			      WHERE p.user_id = c.user_id AND p.cartao_id = c.cartao_id
-			        AND p.vencimento = c.fatura_vencimento)`,
+			SELECT COALESCE(sum(GREATEST(f.total - f.pago, 0)), 0)
+			FROM (
+			    SELECT sum(c.valor_centavos) AS total,
+			           COALESCE((SELECT sum(p.valor_centavos) FROM pagamentos_fatura p
+			                     WHERE p.user_id = c.user_id AND p.cartao_id = c.cartao_id
+			                       AND p.vencimento = c.fatura_vencimento), 0) AS pago
+			    FROM compras_cartao c
+			    WHERE c.user_id = $1 AND c.cartao_id = $2
+			    GROUP BY c.user_id, c.cartao_id, c.fatura_vencimento
+			) f`,
 			userID, cartaoID).Scan(&total)
 	})
 	if isInvalidInput(err) {
@@ -304,8 +310,9 @@ func (r *CartaoRepository) TotalNaoPago(ctx context.Context, userID, cartaoID st
 	return domain.Money(total), nil
 }
 
-// GrupoTemFaturaPaga verifica se a compra toca alguma fatura já paga.
-func (r *CartaoRepository) GrupoTemFaturaPaga(ctx context.Context, userID, grupoID string) (bool, error) {
+// GrupoTemPagamento verifica se a compra toca alguma fatura com pagamento
+// registrado — mesmo que parcial.
+func (r *CartaoRepository) GrupoTemPagamento(ctx context.Context, userID, grupoID string) (bool, error) {
 	var existe bool
 	err := withTenant(ctx, r.db, userID, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `
@@ -351,12 +358,12 @@ func (r *CartaoRepository) DeleteCompraGrupo(ctx context.Context, userID, grupoI
 // Pagamento da fatura
 // ---------------------------------------------------------------------------
 
-const pagamentoColumns = `user_id, cartao_id, vencimento, transacao_id, valor_centavos, pago_em, created_at`
+const pagamentoColumns = `id, user_id, cartao_id, vencimento, transacao_id, valor_centavos, pago_em, created_at`
 
 func scanPagamento(row pgx.Row) (*domain.PagamentoFatura, error) {
 	var p domain.PagamentoFatura
 	var valor int64
-	if err := row.Scan(&p.UserID, &p.CartaoID, &p.Vencimento, &p.TransacaoID,
+	if err := row.Scan(&p.ID, &p.UserID, &p.CartaoID, &p.Vencimento, &p.TransacaoID,
 		&valor, &p.PagoEm, &p.CreatedAt); err != nil {
 		return nil, err
 	}
@@ -364,23 +371,35 @@ func scanPagamento(row pgx.Row) (*domain.PagamentoFatura, error) {
 	return &p, nil
 }
 
-// PagamentoDaFatura devolve ErrNotFound quando a fatura não foi paga.
-func (r *CartaoRepository) PagamentoDaFatura(ctx context.Context, userID, cartaoID string, vencimento time.Time) (*domain.PagamentoFatura, error) {
-	var p *domain.PagamentoFatura
+// PagamentosDaFatura lista os pagamentos do mais antigo para o mais novo.
+// Lista vazia quando a fatura não teve pagamento nenhum.
+func (r *CartaoRepository) PagamentosDaFatura(ctx context.Context, userID, cartaoID string, vencimento time.Time) ([]*domain.PagamentoFatura, error) {
+	out := []*domain.PagamentoFatura{}
 	err := withTenant(ctx, r.db, userID, func(tx pgx.Tx) error {
-		var err error
-		p, err = scanPagamento(tx.QueryRow(ctx, `SELECT `+pagamentoColumns+` FROM pagamentos_fatura
-			WHERE user_id = $1 AND cartao_id = $2 AND vencimento = $3::date`,
-			userID, cartaoID, dateParam(vencimento)))
-		return err
+		rows, err := tx.Query(ctx, `SELECT `+pagamentoColumns+` FROM pagamentos_fatura
+			WHERE user_id = $1 AND cartao_id = $2 AND vencimento = $3::date
+			ORDER BY pago_em, created_at`,
+			userID, cartaoID, dateParam(vencimento))
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			p, err := scanPagamento(rows)
+			if err != nil {
+				return err
+			}
+			out = append(out, p)
+		}
+		return rows.Err()
 	})
-	if errors.Is(err, pgx.ErrNoRows) || isInvalidInput(err) {
+	if isInvalidInput(err) {
 		return nil, domain.ErrNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("pagamentos.find: %w", err)
+		return nil, fmt.Errorf("pagamentos.lista: %w", err)
 	}
-	return p, nil
+	return out, nil
 }
 
 // RegistrarPagamento grava a saída no saldo e o pagamento juntos: ou os dois
@@ -390,32 +409,36 @@ func (r *CartaoRepository) RegistrarPagamento(ctx context.Context, userID string
 		if err := insertTransacao(ctx, tx, userID, t); err != nil {
 			return err
 		}
-		_, err := tx.Exec(ctx, `
+		err := tx.QueryRow(ctx, `
 			INSERT INTO pagamentos_fatura
 				(user_id, cartao_id, vencimento, transacao_id, valor_centavos, pago_em)
-			VALUES ($1, $2, $3::date, $4, $5, $6::date)`,
-			userID, pag.CartaoID, dateParam(pag.Vencimento), t.ID, int64(pag.Valor), dateParam(pag.PagoEm))
-		if c, ok := uniqueViolation(err); ok && c == "pagamentos_fatura_pkey" {
-			return domain.ErrFaturaJaPaga
-		}
+			VALUES ($1, $2, $3::date, $4, $5, $6::date)
+			RETURNING id`,
+			userID, pag.CartaoID, dateParam(pag.Vencimento), t.ID, int64(pag.Valor), dateParam(pag.PagoEm)).Scan(&pag.ID)
 		return err
 	})
 	if isInvalidInput(err) {
 		return domain.ErrNotFound
 	}
-	if err != nil && !errors.Is(err, domain.ErrFaturaJaPaga) {
+	if err != nil {
 		return fmt.Errorf("pagamentos.registrar: %w", err)
 	}
-	return err
+	return nil
 }
 
-// RemoverPagamento apaga o pagamento e a saída correspondente.
-func (r *CartaoRepository) RemoverPagamento(ctx context.Context, userID, cartaoID string, vencimento time.Time) error {
+// RemoverUltimoPagamento apaga o pagamento mais recente da fatura e a saída
+// correspondente. Desfazer é sempre sobre o último: é o que a pessoa acabou de
+// fazer, e os anteriores continuam valendo.
+func (r *CartaoRepository) RemoverUltimoPagamento(ctx context.Context, userID, cartaoID string, vencimento time.Time) error {
 	err := withTenant(ctx, r.db, userID, func(tx pgx.Tx) error {
 		var transacaoID string
 		if err := tx.QueryRow(ctx, `
 			DELETE FROM pagamentos_fatura
-			WHERE user_id = $1 AND cartao_id = $2 AND vencimento = $3::date
+			WHERE id = (
+			    SELECT id FROM pagamentos_fatura
+			    WHERE user_id = $1 AND cartao_id = $2 AND vencimento = $3::date
+			    ORDER BY pago_em DESC, created_at DESC
+			    LIMIT 1)
 			RETURNING transacao_id`,
 			userID, cartaoID, dateParam(vencimento)).Scan(&transacaoID); err != nil {
 			return err

@@ -129,6 +129,22 @@ Bloco novo no `/resumo`:
    "Marcar como paga", bloco na Home.
 3. ⬜ **v3** — bot do WhatsApp.
 
+## Pagamento parcial (21/09/2026)
+
+Pagar R$ 300 de uma fatura de R$ 500 marcava tudo como pago: a fatura tinha no
+máximo um pagamento (chave primária em cartão + vencimento). Agora ela guarda
+uma linha por pagamento (migration `0009`), ganha o status **`parcial`** e
+devolve `restante`.
+
+Por que uma linha por pagamento, e não um campo "valor pago" que cresce: cada
+parte sai da conta num dia — às vezes em meses diferentes — e no regime de
+caixa cada uma é a despesa do seu próprio mês. Um campo só teria uma data, e o
+mês errado levaria o gasto.
+
+O limite disponível passou a ser calculado por fatura (`total - pago`, nunca
+negativo): pagar a mais numa fatura não libera limite das outras, e a parcial
+segura só o que falta.
+
 ## O que a revisão encontrou (e consertou)
 
 **Duas faturas colapsando numa.** A regra intuitiva — "o vencimento é a próxima

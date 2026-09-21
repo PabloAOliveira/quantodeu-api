@@ -174,21 +174,23 @@ type CartaoRepository interface {
 	// ResumoDasFaturas devolve, numa consulta só, o total e o pagamento de cada
 	// fatura com movimento — da mais recente para a mais antiga.
 	ResumoDasFaturas(ctx context.Context, userID, cartaoID string) ([]domain.FaturaResumo, error)
-	// TotalNaoPago soma as compras de faturas sem pagamento registrado — é o
+	// TotalNaoPago soma o que falta pagar em cada fatura do cartão — é o
 	// que está comprometido do limite.
 	TotalNaoPago(ctx context.Context, userID, cartaoID string) (domain.Money, error)
-	// GrupoTemFaturaPaga informa se alguma parcela da compra caiu numa fatura
+	// GrupoTemPagamento informa se alguma parcela da compra caiu numa fatura
 	// já paga — mexer nela mudaria um total que já virou dinheiro.
-	GrupoTemFaturaPaga(ctx context.Context, userID, grupoID string) (bool, error)
+	GrupoTemPagamento(ctx context.Context, userID, grupoID string) (bool, error)
 	// DeleteCompraGrupo remove todas as parcelas de uma compra.
 	DeleteCompraGrupo(ctx context.Context, userID, grupoID string) (int64, error)
 
-	// PagamentoDaFatura devolve nil quando a fatura não foi paga.
-	PagamentoDaFatura(ctx context.Context, userID, cartaoID string, vencimento time.Time) (*domain.PagamentoFatura, error)
+	// PagamentosDaFatura lista os pagamentos da fatura, do mais antigo para o
+	// mais novo. Vazio quando nada foi pago.
+	PagamentosDaFatura(ctx context.Context, userID, cartaoID string, vencimento time.Time) ([]*domain.PagamentoFatura, error)
 	// RegistrarPagamento grava a transação de saída e o pagamento atomicamente.
 	RegistrarPagamento(ctx context.Context, userID string, t *domain.Transacao, pag *domain.PagamentoFatura) error
-	// RemoverPagamento apaga o pagamento e a transação de saída.
-	RemoverPagamento(ctx context.Context, userID, cartaoID string, vencimento time.Time) error
+	// RemoverUltimoPagamento apaga o pagamento mais recente da fatura e a
+	// transação de saída dele. ErrFaturaNaoPaga quando não há nenhum.
+	RemoverUltimoPagamento(ctx context.Context, userID, cartaoID string, vencimento time.Time) error
 }
 
 // WhatsAppSender envia mensagens ao usuário (confirmações, códigos).

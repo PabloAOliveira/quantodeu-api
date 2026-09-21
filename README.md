@@ -118,6 +118,11 @@ Três regras que valem a pena conhecer:
 - **Quem manda na despesa é o valor pago**, não o total da fatura: o banco cobra
   o que quer, e o `valor_pago` volta na resposta para a tela não anunciar um
   número que não saiu da conta.
+- **Pagar menos que o total deixa a fatura `parcial`**, não paga. Ela aceita
+  quantos pagamentos precisar — cada um com a sua data e a sua saída, porque
+  metade agora e metade no mês que vem são duas despesas de meses diferentes.
+  `restante` diz o que falta; sem `valor` no corpo, pagar quita justamente isso.
+  `DELETE .../pagar` desfaz só o pagamento mais recente.
 - **Cartão arquivado (`ativo=false`) não aceita compra nova** (409
   `cartao_arquivado`). Arquivar é dizer "não uso mais"; as faturas antigas ficam.
 

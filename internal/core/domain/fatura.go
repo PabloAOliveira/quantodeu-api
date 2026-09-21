@@ -123,7 +123,9 @@ const (
 	FaturaAberta StatusFatura = "aberta"
 	// FaturaFechada passou do fechamento e espera pagamento.
 	FaturaFechada StatusFatura = "fechada"
-	// FaturaPaga teve o pagamento registrado.
+	// FaturaParcial recebeu pagamento, mas não o suficiente para quitá-la.
+	FaturaParcial StatusFatura = "parcial"
+	// FaturaPaga está quitada: os pagamentos cobrem o total.
 	FaturaPaga StatusFatura = "paga"
 )
 
@@ -131,6 +133,7 @@ const (
 // saída criada. É o único fato da fatura que precisa ser gravado — o resto é
 // derivado das compras.
 type PagamentoFatura struct {
+	ID          string
 	UserID      string
 	CartaoID    string
 	Vencimento  time.Time
@@ -146,7 +149,14 @@ type PagamentoFatura struct {
 type FaturaResumo struct {
 	Vencimento time.Time
 	Total      Money
-	Pagamento  *PagamentoFatura
+	// Pago é a soma dos pagamentos: a fatura aceita quantos precisar, porque
+	// pagar metade agora e metade depois é comum.
+	Pago Money
+	// UltimoPagamentoEm é zero quando não houve pagamento nenhum.
+	UltimoPagamentoEm time.Time
+	// UltimoPagamentoValor é quanto foi o pagamento mais recente. Desfazer
+	// mexe só nele, então a tela precisa saber o valor sem carregar a lista.
+	UltimoPagamentoValor Money
 }
 
 // Fatura é a visão de um ciclo do cartão. Derivada, nunca armazenada: assim
@@ -158,10 +168,29 @@ type Fatura struct {
 	InicioCiclo time.Time
 	FimCiclo    time.Time
 	Total       Money
-	Compras     []*CompraCartao
-	Status      StatusFatura
-	Pagamento   *PagamentoFatura
+	// Pago é a soma dos pagamentos já registrados.
+	Pago    Money
+	Compras []*CompraCartao
+	Status  StatusFatura
+	// Pagamentos vem vazio no resumo (a Home não precisa da lista).
+	Pagamentos []*PagamentoFatura
+	// UltimoPagamentoEm é zero quando a fatura não tem pagamento.
+	UltimoPagamentoEm time.Time
+	// UltimoPagamentoValor é o valor do pagamento mais recente.
+	UltimoPagamentoValor Money
 }
+
+// Restante é o que ainda falta pagar. Nunca negativo: o banco pode cobrar mais
+// que o total da fatura, e isso não vira crédito aqui.
+func (f *Fatura) Restante() Money {
+	if falta := f.Total - f.Pago; falta > 0 {
+		return falta
+	}
+	return 0
+}
+
+// Quitada diz se os pagamentos cobrem o total.
+func (f *Fatura) Quitada() bool { return f.Pago > 0 && f.Pago >= f.Total }
 
 // CompetenciaDe formata o mês do vencimento: é como a fatura é referenciada
 // na API (`/faturas/2026-10`).
@@ -178,13 +207,17 @@ func ParseCompetencia(ref string) (time.Time, error) {
 
 // MontarDoResumo monta a fatura a partir do agregado, sem a lista de compras.
 func MontarDoResumo(c *Cartao, r FaturaResumo, hoje time.Time) *Fatura {
-	f := MontarFatura(c, r.Vencimento, nil, r.Pagamento, hoje)
+	f := MontarFatura(c, r.Vencimento, nil, nil, hoje)
 	f.Total = r.Total
+	f.Pago = r.Pago
+	f.UltimoPagamentoEm = r.UltimoPagamentoEm
+	f.UltimoPagamentoValor = r.UltimoPagamentoValor
+	f.definirStatus(hoje)
 	return f
 }
 
-// MontarFatura junta cartão, compras e pagamento numa fatura.
-func MontarFatura(c *Cartao, vencimento time.Time, compras []*CompraCartao, pag *PagamentoFatura, hoje time.Time) *Fatura {
+// MontarFatura junta cartão, compras e pagamentos numa fatura.
+func MontarFatura(c *Cartao, vencimento time.Time, compras []*CompraCartao, pagamentos []*PagamentoFatura, hoje time.Time) *Fatura {
 	vencimento = DateOnly(vencimento)
 	f := &Fatura{
 		CartaoID:    c.ID,
@@ -193,20 +226,40 @@ func MontarFatura(c *Cartao, vencimento time.Time, compras []*CompraCartao, pag 
 		InicioCiclo: c.InicioDoCiclo(vencimento),
 		FimCiclo:    c.FimDoCiclo(vencimento),
 		Compras:     compras,
-		Pagamento:   pag,
+		Pagamentos:  pagamentos,
 	}
 	for _, compra := range compras {
 		f.Total += compra.Valor
 	}
+	for _, pag := range pagamentos {
+		f.Pago += pag.Valor
+		// A lista vem em ordem de pagamento: o último é o que "desfazer" tira.
+		if !pag.PagoEm.Before(f.UltimoPagamentoEm) {
+			f.UltimoPagamentoEm = pag.PagoEm
+			f.UltimoPagamentoValor = pag.Valor
+		}
+	}
+	f.definirStatus(hoje)
+	return f
+}
+
+// AtualizarStatus recalcula o estágio depois de mexer nos pagamentos.
+func (f *Fatura) AtualizarStatus(hoje time.Time) { f.definirStatus(hoje) }
+
+// definirStatus decide o estágio da fatura. Pagamento que não cobre o total
+// deixa a fatura em "parcial": ela continua sendo uma conta a pagar, só que
+// menor.
+func (f *Fatura) definirStatus(hoje time.Time) {
 	switch {
-	case pag != nil:
+	case f.Quitada():
 		f.Status = FaturaPaga
+	case f.Pago > 0:
+		f.Status = FaturaParcial
 	case !DateOnly(hoje).After(f.FimCiclo):
 		f.Status = FaturaAberta
 	default:
 		f.Status = FaturaFechada
 	}
-	return f
 }
 
 // ResumoCartao é o que a Home e a lista de cartões mostram: as duas faturas

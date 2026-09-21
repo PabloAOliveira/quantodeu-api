@@ -643,15 +643,28 @@ type CartaoResponse struct {
 
 // FaturaResponse é um ciclo do cartão.
 type FaturaResponse struct {
-	Competencia string                 `json:"competencia" example:"2026-10"`
-	Vencimento  string                 `json:"vencimento" example:"2026-10-21"`
-	InicioCiclo string                 `json:"inicio_ciclo" example:"2026-09-21"`
-	FimCiclo    string                 `json:"fim_ciclo" doc:"Fechamento: compras após esta data caem na fatura seguinte" example:"2026-10-20"`
-	Total       MoneyResponse          `json:"total"`
-	Status      string                 `json:"status" doc:"aberta | fechada | paga" example:"fechada"`
-	PagoEm      string                 `json:"pago_em,omitempty" example:"2026-10-20"`
-	ValorPago   *MoneyResponse         `json:"valor_pago,omitempty" doc:"Quanto saiu da conta — pode diferir do total quando o banco cobra outro valor"`
-	Compras     []CompraCartaoResponse `json:"compras,omitempty"`
+	Competencia     string                    `json:"competencia" example:"2026-10"`
+	Vencimento      string                    `json:"vencimento" example:"2026-10-21"`
+	InicioCiclo     string                    `json:"inicio_ciclo" example:"2026-09-21"`
+	FimCiclo        string                    `json:"fim_ciclo" doc:"Fechamento: compras após esta data caem na fatura seguinte" example:"2026-10-20"`
+	Total           MoneyResponse             `json:"total"`
+	Status          string                    `json:"status" doc:"aberta | fechada | parcial | paga" example:"fechada"`
+	PagoEm          string                    `json:"pago_em,omitempty" doc:"Data do pagamento mais recente" example:"2026-10-20"`
+	ValorPago       *MoneyResponse            `json:"valor_pago,omitempty" doc:"Soma do que já saiu da conta por esta fatura"`
+	Restante        MoneyResponse             `json:"restante" doc:"Quanto ainda falta pagar (zero quando quitada)"`
+	UltimoPagamento *MoneyResponse            `json:"ultimo_pagamento,omitempty" doc:"Valor do pagamento mais recente — é o que desfazer remove"`
+	Pagamentos      []PagamentoFaturaResponse `json:"pagamentos,omitempty" doc:"Só no detalhe da fatura, do mais antigo para o mais novo"`
+	Compras         []CompraCartaoResponse    `json:"compras,omitempty"`
+}
+
+// PagamentoFaturaResponse é um pagamento da fatura. Uma fatura pode ter vários:
+// pagar parte agora e o resto depois é comum, e cada parte sai da conta no seu
+// próprio dia.
+type PagamentoFaturaResponse struct {
+	ID          string        `json:"id"`
+	Valor       MoneyResponse `json:"valor"`
+	PagoEm      string        `json:"pago_em" example:"2026-10-20"`
+	TransacaoID string        `json:"transacao_id" doc:"A saída que este pagamento criou"`
 }
 
 // CompraCartaoResponse é uma parcela de uma compra.
@@ -696,11 +709,22 @@ func NewFaturaResponse(f *domain.Fatura) FaturaResponse {
 		FimCiclo:    f.FimCiclo.Format("2006-01-02"),
 		Total:       NewMoney(f.Total),
 		Status:      string(f.Status),
+		Restante:    NewMoney(f.Restante()),
 	}
-	if f.Pagamento != nil {
-		out.PagoEm = f.Pagamento.PagoEm.Format("2006-01-02")
-		pago := NewMoney(f.Pagamento.Valor)
+	if f.Pago > 0 {
+		pago := NewMoney(f.Pago)
 		out.ValorPago = &pago
+	}
+	if !f.UltimoPagamentoEm.IsZero() {
+		out.PagoEm = f.UltimoPagamentoEm.Format("2006-01-02")
+		ultimo := NewMoney(f.UltimoPagamentoValor)
+		out.UltimoPagamento = &ultimo
+	}
+	for _, p := range f.Pagamentos {
+		out.Pagamentos = append(out.Pagamentos, PagamentoFaturaResponse{
+			ID: p.ID, Valor: NewMoney(p.Valor), PagoEm: p.PagoEm.Format("2006-01-02"),
+			TransacaoID: p.TransacaoID,
+		})
 	}
 	for _, c := range f.Compras {
 		out.Compras = append(out.Compras, CompraCartaoResponse{

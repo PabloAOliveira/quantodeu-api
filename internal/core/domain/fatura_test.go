@@ -117,10 +117,78 @@ func TestMontarFatura_Status(t *testing.T) {
 	if f := MontarFatura(c, venc, compras, nil, dia("2026-09-21")); f.Status != FaturaFechada {
 		t.Errorf("status em 21/09 = %s; queria fechada", f.Status)
 	}
-	// Com pagamento registrado: paga, não importa a data.
-	pago := &PagamentoFatura{Valor: 60000, PagoEm: dia("2026-09-20")}
+	// Com pagamento que cobre o total: paga, não importa a data.
+	pago := []*PagamentoFatura{{Valor: 60000, PagoEm: dia("2026-09-20")}}
 	if f := MontarFatura(c, venc, compras, pago, dia("2026-09-21")); f.Status != FaturaPaga {
 		t.Errorf("status com pagamento = %s; queria paga", f.Status)
+	}
+}
+
+// Pagar R$ 300 de uma fatura de R$ 500 não quita nada: a conta continua de pé,
+// valendo o que falta.
+func TestFaturaPagamentoParcial(t *testing.T) {
+	c := cartao(t, 20, 21)
+	venc := dia("2026-09-21")
+	compras := []*CompraCartao{{Valor: 50000}}
+
+	parcial := []*PagamentoFatura{{Valor: 30000, PagoEm: dia("2026-09-21")}}
+	f := MontarFatura(c, venc, compras, parcial, dia("2026-09-25"))
+	if f.Status != FaturaParcial {
+		t.Errorf("status = %s; queria parcial", f.Status)
+	}
+	if f.Total != 50000 {
+		t.Errorf("total = %d; queria 50000 (o total é das compras, não do que foi pago)", f.Total)
+	}
+	if f.Pago != 30000 {
+		t.Errorf("pago = %d; queria 30000", f.Pago)
+	}
+	if f.Restante() != 20000 {
+		t.Errorf("restante = %d; queria 20000", f.Restante())
+	}
+	if f.Quitada() {
+		t.Error("fatura parcial não está quitada")
+	}
+
+	// O resto, pago noutro dia: agora sim quitada, e a data é a do último.
+	completo := append(parcial, &PagamentoFatura{Valor: 20000, PagoEm: dia("2026-10-02")})
+	f = MontarFatura(c, venc, compras, completo, dia("2026-10-05"))
+	if f.Status != FaturaPaga {
+		t.Errorf("status = %s; queria paga", f.Status)
+	}
+	if f.Restante() != 0 {
+		t.Errorf("restante = %d; queria 0", f.Restante())
+	}
+	if !f.UltimoPagamentoEm.Equal(dia("2026-10-02")) {
+		t.Errorf("último pagamento = %s; queria 02/10", f.UltimoPagamentoEm)
+	}
+}
+
+// Banco cobrando mais que o total não vira crédito nem limite extra.
+func TestFaturaPagamentoMaiorQueTotal(t *testing.T) {
+	c := cartao(t, 20, 21)
+	venc := dia("2026-09-21")
+	compras := []*CompraCartao{{Valor: 42000}}
+	pago := []*PagamentoFatura{{Valor: 43500, PagoEm: dia("2026-09-21")}}
+
+	f := MontarFatura(c, venc, compras, pago, dia("2026-09-25"))
+	if f.Status != FaturaPaga {
+		t.Errorf("status = %s; queria paga", f.Status)
+	}
+	if f.Restante() != 0 {
+		t.Errorf("restante = %d; queria 0, nunca negativo", f.Restante())
+	}
+}
+
+// Fatura sem compra nenhuma e sem pagamento não pode cair em "paga" só porque
+// 0 >= 0.
+func TestFaturaVaziaNaoEhPaga(t *testing.T) {
+	c := cartao(t, 20, 21)
+	f := MontarFatura(c, dia("2026-09-21"), nil, nil, dia("2026-09-25"))
+	if f.Status != FaturaFechada {
+		t.Errorf("status = %s; queria fechada", f.Status)
+	}
+	if f.Quitada() {
+		t.Error("fatura vazia não está quitada")
 	}
 }
 

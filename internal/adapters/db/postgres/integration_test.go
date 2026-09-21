@@ -447,40 +447,71 @@ func TestCartaoRepository_IsolamentoEPagamento(t *testing.T) {
 
 	// Pagamento: a saída no saldo e o registro entram juntos.
 	saldoAntes, _ := txs.SaldoAte(ctx, a.ID, hoje.AddDate(0, 0, 1))
-	pagamento := &domain.PagamentoFatura{UserID: a.ID, CartaoID: cartao.ID,
-		Vencimento: venc, Valor: 30000, PagoEm: hoje}
-	saida, err := domain.NewTransacao(domain.NewTransacaoInput{UserID: a.ID,
-		Tipo: domain.TipoSaida, Valor: 30000, Categoria: "cartão de crédito",
-		Descricao: "Fatura Nubank", Data: hoje, Origem: domain.OrigemManual})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := cartoes.RegistrarPagamento(ctx, a.ID, saida, pagamento); err != nil {
-		t.Fatal(err)
-	}
-	saldoDepois, _ := txs.SaldoAte(ctx, a.ID, hoje.AddDate(0, 0, 1))
-	if saldoAntes-saldoDepois != 30000 {
-		t.Fatalf("o pagamento não saiu do saldo: antes %d, depois %d", saldoAntes, saldoDepois)
+	pagar := func(valor domain.Money, dia time.Time) {
+		t.Helper()
+		saida, err := domain.NewTransacao(domain.NewTransacaoInput{UserID: a.ID,
+			Tipo: domain.TipoSaida, Valor: valor, Categoria: "cartão de crédito",
+			Descricao: "Fatura Nubank", Data: dia, Origem: domain.OrigemManual})
+		if err != nil {
+			t.Fatal(err)
+		}
+		pag := &domain.PagamentoFatura{UserID: a.ID, CartaoID: cartao.ID,
+			Vencimento: venc, Valor: valor, PagoEm: dia}
+		if err := cartoes.RegistrarPagamento(ctx, a.ID, saida, pag); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	// Pagar de novo a mesma fatura é bloqueado pela chave primária.
-	if err := cartoes.RegistrarPagamento(ctx, a.ID, saida, pagamento); !errors.Is(err, domain.ErrFaturaJaPaga) {
-		t.Fatalf("pagamento duplicado: %v", err)
+	// Primeira fatura tem 30000 (parcela 1 de 2). Paga 10000: sobra 20000 dela
+	// mais os 30000 da parcela seguinte.
+	pagar(10000, hoje)
+	saldoDepois, _ := txs.SaldoAte(ctx, a.ID, hoje.AddDate(0, 0, 1))
+	if saldoAntes-saldoDepois != 10000 {
+		t.Fatalf("o pagamento não saiu do saldo: antes %d, depois %d", saldoAntes, saldoDepois)
 	}
-	// B não desfaz o pagamento de A.
-	if err := cartoes.RemoverPagamento(ctx, b.ID, cartao.ID, venc); !errors.Is(err, domain.ErrFaturaNaoPaga) {
+	if total, _ := cartoes.TotalNaoPago(ctx, a.ID, cartao.ID); total != 50000 {
+		t.Fatalf("comprometido após pagamento parcial = %d; queria 50000", total)
+	}
+
+	// O resto, noutro dia: a fatura aceita mais de um pagamento.
+	pagar(20000, hoje.AddDate(0, 0, 10))
+	pagamentos, err := cartoes.PagamentosDaFatura(ctx, a.ID, cartao.ID, venc)
+	if err != nil || len(pagamentos) != 2 {
+		t.Fatalf("pagamentos da fatura = %d, %v; queria 2", len(pagamentos), err)
+	}
+	if pagamentos[0].Valor != 10000 || pagamentos[1].Valor != 20000 {
+		t.Fatalf("pagamentos fora de ordem: %d, %d", pagamentos[0].Valor, pagamentos[1].Valor)
+	}
+	if total, _ := cartoes.TotalNaoPago(ctx, a.ID, cartao.ID); total != 30000 {
+		t.Fatalf("comprometido após quitar = %d; queria 30000 (a parcela seguinte)", total)
+	}
+
+	// B não enxerga nem desfaz o pagamento de A.
+	if lista, _ := cartoes.PagamentosDaFatura(ctx, b.ID, cartao.ID, venc); len(lista) != 0 {
+		t.Fatal("B enxergou pagamentos de A")
+	}
+	if err := cartoes.RemoverUltimoPagamento(ctx, b.ID, cartao.ID, venc); !errors.Is(err, domain.ErrFaturaNaoPaga) {
 		t.Fatalf("B removeu pagamento de A: %v", err)
 	}
 
-	// Desfazer devolve o saldo: a transação some junto.
-	if err := cartoes.RemoverPagamento(ctx, a.ID, cartao.ID, venc); err != nil {
+	// Desfazer tira só o último, e devolve o saldo dele.
+	if err := cartoes.RemoverUltimoPagamento(ctx, a.ID, cartao.ID, venc); err != nil {
+		t.Fatal(err)
+	}
+	if lista, _ := cartoes.PagamentosDaFatura(ctx, a.ID, cartao.ID, venc); len(lista) != 1 || lista[0].Valor != 10000 {
+		t.Fatalf("desfazer não parou no último: %+v", lista)
+	}
+	if err := cartoes.RemoverUltimoPagamento(ctx, a.ID, cartao.ID, venc); err != nil {
 		t.Fatal(err)
 	}
 	if saldoFinal, _ := txs.SaldoAte(ctx, a.ID, hoje.AddDate(0, 0, 1)); saldoFinal != saldoAntes {
 		t.Fatalf("saldo após desfazer = %d; queria %d", saldoFinal, saldoAntes)
 	}
-	if _, err := cartoes.PagamentoDaFatura(ctx, a.ID, cartao.ID, venc); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("pagamento sobreviveu: %v", err)
+	if lista, _ := cartoes.PagamentosDaFatura(ctx, a.ID, cartao.ID, venc); len(lista) != 0 {
+		t.Fatalf("pagamento sobreviveu: %+v", lista)
+	}
+	if err := cartoes.RemoverUltimoPagamento(ctx, a.ID, cartao.ID, venc); !errors.Is(err, domain.ErrFaturaNaoPaga) {
+		t.Fatalf("desfazer sem pagamento: %v", err)
 	}
 
 	// B não apaga as compras de A.

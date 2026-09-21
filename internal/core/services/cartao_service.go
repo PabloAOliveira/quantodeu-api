@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -149,11 +148,12 @@ func (s *CartaoService) resumo(ctx context.Context, userID string, c *domain.Car
 		return nil, fmt.Errorf("cartão: resumo das faturas: %w", err)
 	}
 
-	// A "a pagar" é a fatura não paga mais antiga que tem compras: é a próxima
-	// conta que vai chegar. O campo `status` dela diz se já fechou ou se ainda
-	// está acumulando.
+	// A "a pagar" é a fatura não quitada mais antiga que tem compras: é a
+	// próxima conta que vai chegar. Paga pela metade ela continua aqui, agora
+	// valendo só o que falta. O campo `status` diz se fechou, se ainda acumula
+	// ou se está parcial.
 	for i := len(faturas) - 1; i >= 0; i-- { // do mais antigo para o mais novo
-		if faturas[i].Pagamento == nil && faturas[i].Total > 0 {
+		if faturas[i].Total > faturas[i].Pago && faturas[i].Total > 0 {
 			r.APagar = domain.MontarDoResumo(c, faturas[i], hoje)
 			break
 		}
@@ -182,11 +182,11 @@ func (s *CartaoService) montar(ctx context.Context, userID string, c *domain.Car
 	if err != nil {
 		return nil, fmt.Errorf("cartão: compras da fatura: %w", err)
 	}
-	pag, err := s.cartoes.PagamentoDaFatura(ctx, userID, c.ID, vencimento)
-	if err != nil && !errors.Is(err, domain.ErrNotFound) {
-		return nil, fmt.Errorf("cartão: pagamento da fatura: %w", err)
+	pagamentos, err := s.cartoes.PagamentosDaFatura(ctx, userID, c.ID, vencimento)
+	if err != nil {
+		return nil, fmt.Errorf("cartão: pagamentos da fatura: %w", err)
 	}
-	return domain.MontarFatura(c, vencimento, compras, pag, hoje), nil
+	return domain.MontarFatura(c, vencimento, compras, pagamentos, hoje), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -259,16 +259,18 @@ func (s *CartaoService) PagarFatura(ctx context.Context, userID, cartaoID, compe
 	if err != nil {
 		return nil, err
 	}
-	if fatura.Status == domain.FaturaPaga {
+	if fatura.Quitada() {
 		return nil, domain.ErrFaturaJaPaga
 	}
 	if fatura.Total <= 0 {
 		return nil, domain.ErrFaturaVazia
 	}
 
+	// Sem valor informado, o padrão é quitar o que falta — não o total da
+	// fatura, que numa fatura parcial já foi pago em parte.
 	valor := in.Valor
 	if valor <= 0 {
-		valor = fatura.Total
+		valor = fatura.Restante()
 	}
 	pagoEm := s.naData(in.Data)
 
@@ -289,11 +291,16 @@ func (s *CartaoService) PagarFatura(ctx context.Context, userID, cartaoID, compe
 		return nil, fmt.Errorf("pagar fatura: %w", err)
 	}
 	pag.TransacaoID = t.ID
-	fatura.Pagamento = pag
-	fatura.Status = domain.FaturaPaga
+	fatura.Pagamentos = append(fatura.Pagamentos, pag)
+	fatura.Pago += valor
+	if pagoEm.After(fatura.UltimoPagamentoEm) {
+		fatura.UltimoPagamentoEm = pagoEm
+	}
+	fatura.AtualizarStatus(hoje)
 	s.log.InfoContext(ctx, "fatura paga",
 		slog.String("user_id", userID), slog.String("cartao_id", c.ID),
-		slog.String("competencia", fatura.Competencia))
+		slog.String("competencia", fatura.Competencia),
+		slog.String("status", string(fatura.Status)))
 	return fatura, nil
 }
 
@@ -307,13 +314,7 @@ func (s *CartaoService) DesfazerPagamento(ctx context.Context, userID, cartaoID,
 	if err != nil {
 		return err
 	}
-	if _, err := s.cartoes.PagamentoDaFatura(ctx, userID, cartaoID, vencimento); err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return domain.ErrFaturaNaoPaga
-		}
-		return err
-	}
-	return s.cartoes.RemoverPagamento(ctx, userID, cartaoID, vencimento)
+	return s.cartoes.RemoverUltimoPagamento(ctx, userID, cartaoID, vencimento)
 }
 
 // ---------------------------------------------------------------------------
@@ -341,11 +342,13 @@ func (s *CartaoService) RegistrarCompra(ctx context.Context, userID, cartaoID st
 	}
 	// Lançar numa fatura já paga mudaria um total que já virou dinheiro na
 	// conta: a fatura continuaria "paga", mas por um valor diferente do que
-	// saiu. Melhor barrar do que guardar uma incoerência silenciosa.
-	if _, err := s.cartoes.PagamentoDaFatura(ctx, userID, cartaoID, compras[0].FaturaVencimento); err == nil {
-		return nil, domain.ErrFaturaFechadaParaCompra
-	} else if !errors.Is(err, domain.ErrNotFound) {
+	// saiu. Vale também para a parcial — o que falta pagar mudaria sozinho.
+	pagamentos, err := s.cartoes.PagamentosDaFatura(ctx, userID, cartaoID, compras[0].FaturaVencimento)
+	if err != nil {
 		return nil, fmt.Errorf("registrar compra: %w", err)
+	}
+	if len(pagamentos) > 0 {
+		return nil, domain.ErrFaturaFechadaParaCompra
 	}
 	if err := s.cartoes.CreateCompras(ctx, userID, compras); err != nil {
 		return nil, fmt.Errorf("registrar compra: %w", err)
@@ -358,7 +361,7 @@ func (s *CartaoService) RegistrarCompra(ctx context.Context, userID, cartaoID st
 func (s *CartaoService) ExcluirCompra(ctx context.Context, userID, grupoID string) (int64, error) {
 	// Mesma razão do lançamento: apagar uma parcela que já foi paga deixaria o
 	// pagamento sem lastro.
-	pago, err := s.cartoes.GrupoTemFaturaPaga(ctx, userID, grupoID)
+	pago, err := s.cartoes.GrupoTemPagamento(ctx, userID, grupoID)
 	if err != nil {
 		return 0, err
 	}
