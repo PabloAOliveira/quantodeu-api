@@ -35,6 +35,7 @@ var (
 	ErrEmailDeliveryFailed     = errors.New("não foi possível enviar o e-mail agora; tente novamente em instantes")
 	ErrPasswordReuse           = errors.New("a nova senha deve ser diferente da atual")
 	ErrCartaoComHistorico      = errors.New("este cartão tem compras registradas; arquive-o em vez de excluir")
+	ErrCartaoArquivado         = errors.New("este cartão está arquivado; reative-o para lançar compras")
 	ErrFaturaJaPaga            = errors.New("esta fatura já foi paga")
 	ErrFaturaNaoPaga           = errors.New("esta fatura não tem pagamento registrado")
 	ErrFaturaVazia             = errors.New("esta fatura não tem compras")

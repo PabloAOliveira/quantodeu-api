@@ -650,6 +650,7 @@ type FaturaResponse struct {
 	Total       MoneyResponse          `json:"total"`
 	Status      string                 `json:"status" doc:"aberta | fechada | paga" example:"fechada"`
 	PagoEm      string                 `json:"pago_em,omitempty" example:"2026-10-20"`
+	ValorPago   *MoneyResponse         `json:"valor_pago,omitempty" doc:"Quanto saiu da conta — pode diferir do total quando o banco cobra outro valor"`
 	Compras     []CompraCartaoResponse `json:"compras,omitempty"`
 }
 
@@ -698,6 +699,8 @@ func NewFaturaResponse(f *domain.Fatura) FaturaResponse {
 	}
 	if f.Pagamento != nil {
 		out.PagoEm = f.Pagamento.PagoEm.Format("2006-01-02")
+		pago := NewMoney(f.Pagamento.Valor)
+		out.ValorPago = &pago
 	}
 	for _, c := range f.Compras {
 		out.Compras = append(out.Compras, CompraCartaoResponse{

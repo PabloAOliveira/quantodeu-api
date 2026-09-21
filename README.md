@@ -115,6 +115,11 @@ Três regras que valem a pena conhecer:
   nenhum dia fique fora de um ciclo — nem em dois.
 - **A fatura é derivada**, nunca armazenada: ela sai do cartão + das compras,
   como o progresso do parcelamento. O único fato gravado é o pagamento.
+- **Quem manda na despesa é o valor pago**, não o total da fatura: o banco cobra
+  o que quer, e o `valor_pago` volta na resposta para a tela não anunciar um
+  número que não saiu da conta.
+- **Cartão arquivado (`ativo=false`) não aceita compra nova** (409
+  `cartao_arquivado`). Arquivar é dizer "não uso mais"; as faturas antigas ficam.
 
 As compras ficam em `compras_cartao`, fora de `transacoes`, justamente porque lá
 vale "toda linha mexe no saldo" e `SaldoAte` depende disso.

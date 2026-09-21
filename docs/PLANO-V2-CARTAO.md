@@ -1,8 +1,8 @@
 # v2 — Cartão de crédito
 
-> **Status: API implementada** (18/09/2026). Domínio, migration `0008_cartoes`,
-> repositório, serviço, endpoints e bloco no `/resumo` prontos e testados.
-> Falta o app.
+> **Status: pronto** (21/09/2026). API — domínio, migration `0008_cartoes`,
+> repositório, serviço, endpoints e bloco no `/resumo`. App — aba Cartões,
+> cadastro, lançamento de compra, tela da fatura e bloco na Home.
 
 ## A regra que manda em tudo
 
@@ -125,7 +125,7 @@ Bloco novo no `/resumo`:
 1. ✅ **API** — migration (`cartoes`, `compras_cartao`, `pagamentos_fatura`),
    domínio da fatura com testes de virada de mês e compra pós-fechamento,
    endpoints, bloco no resumo.
-2. ⬜ **App** — aba Cartões, cadastro, lançar compra, tela da fatura com botão
+2. ✅ **App** — aba Cartões, cadastro, lançar compra, tela da fatura com botão
    "Marcar como paga", bloco na Home.
 3. ⬜ **v3** — bot do WhatsApp.
 

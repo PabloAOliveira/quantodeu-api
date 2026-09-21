@@ -163,6 +163,8 @@ func respondError(c *gin.Context, log *slog.Logger, err error) {
 		write(http.StatusForbidden, "email_nao_verificado", err.Error(), "")
 	case errors.Is(err, domain.ErrCartaoComHistorico):
 		write(http.StatusConflict, "cartao_com_historico", err.Error(), "")
+	case errors.Is(err, domain.ErrCartaoArquivado):
+		write(http.StatusConflict, "cartao_arquivado", err.Error(), "")
 	case errors.Is(err, domain.ErrFaturaJaPaga):
 		write(http.StatusConflict, "fatura_ja_paga", err.Error(), "")
 	case errors.Is(err, domain.ErrFaturaNaoPaga):

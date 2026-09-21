@@ -326,6 +326,11 @@ func (s *CartaoService) RegistrarCompra(ctx context.Context, userID, cartaoID st
 	if err != nil {
 		return nil, err
 	}
+	// Arquivar é dizer "não uso mais": aceitar compra nova aqui faria o cartão
+	// voltar a mexer no limite e nas faturas de um cartão fora de uso.
+	if !c.Ativo {
+		return nil, domain.ErrCartaoArquivado
+	}
 	compras, err := domain.NewCompraCartao(c, domain.NewCompraInput{
 		UserID: userID, CartaoID: cartaoID, Valor: in.Valor,
 		Categoria: in.Categoria, Descricao: in.Descricao,
