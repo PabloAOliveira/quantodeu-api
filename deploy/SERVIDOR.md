@@ -228,6 +228,22 @@ certeza de que não está passando pela rede de casa):
 https://api.pabloantonio.online/readyz
 ```
 
+### 3.5 Liberar a origem da web
+
+Se o site também for ao ar, a origem dele precisa entrar na allowlist — sem
+isso o navegador descarta toda resposta e a tela fica vazia sem dizer por quê:
+
+```bash
+nano .env      # CORS_ALLOWED_ORIGINS=https://app.pabloantonio.online
+docker compose -f docker-compose.prod.yml up -d
+```
+
+O site tem de ficar num **subdomínio deste mesmo domínio**. O cookie de sessão
+é `SameSite=Strict` com prefixo `__Host-`, e o CSRF barra requisição marcada
+como `cross-site`: de outro domínio registrável o navegador nem manda o
+cookie, e o login falha sem erro visível. O passo a passo da web está no repo
+do app, em `docs/DEPLOY-WEB.md`.
+
 Deve responder `{"status":"ok","checks":{"postgres":"ok"}}`.
 
 O certificado HTTPS é emitido e renovado pela Cloudflare, sem nada a fazer.
